@@ -133,9 +133,23 @@ void Label(const Button &button)
     if (!font)
     {
         if (!TTF_WasInit()) TTF_Init();
-        font = TTF_OpenFont("/System/Library/Fonts/CoreUI/SFUI.ttf",24);
-        if (!font) font = TTF_OpenFont("/System/Library/Fonts/PingFang.ttc",24);
-        if (!font) return;
+        const char *fontPaths[] = {
+            "/System/Library/Fonts/CoreUI/SFUI.ttf",
+            "/System/Library/Fonts/CoreUI/SFUI-Regular.otf",
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/Helvetica.ttc",
+            NULL
+        };
+        for (const char **path = fontPaths; *path != NULL && font == nullptr; ++path)
+            font = TTF_OpenFont(*path,24);
+        if (!font)
+        {
+            char message[192];
+            SDL_snprintf(message,sizeof(message),"touch-label: font unavailable: %s",TTF_GetError());
+            modern::LogStartup(message);
+            return;
+        }
+        modern::LogStartup("touch-label: system font loaded");
     }
     auto it = cache.find(button.label);
     if (it == cache.end())
