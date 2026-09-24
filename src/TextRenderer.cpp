@@ -1,0 +1,645 @@
+#include "TextRenderer.hpp"
+
+#include "Global.hpp"
+
+#include <string.h>
+#ifdef TH095_IOS
+#include <stdio.h>
+namespace th095 { namespace modern { void LogStartup(const char *); } }
+#endif
+
+namespace th095
+{
+
+#if defined(TH095_MATCH_EXACT) || defined(DIFFBUILD)
+#define previousSelectedBitmap originalBitmap
+#endif
+
+#if defined(TH095_MATCH_EXACT) || defined(DIFFBUILD)
+#define ownedBitmap bitmap
+#define bitmapBits buffer
+#endif
+
+DIFFABLE_STATIC(HFONT, g_TextFontWidth19);
+DIFFABLE_STATIC(HFONT, g_TextFontWidth20OrMore);
+DIFFABLE_STATIC(HFONT, g_TextFontWidth17OrLess);
+DIFFABLE_STATIC(HFONT, g_TextFontWidth18);
+DIFFABLE_STATIC(TextRenderBufferView, g_TextRenderBuffer);
+
+DIFFABLE_STATIC_ARRAY_ASSIGN(TextRenderFormatInfo, 7,
+                             g_TextRenderFormatInfoArray) = {
+    {D3DFMT_X8R8G8B8, 32, 0x00000000, 0x00ff0000, 0x0000ff00,
+     0x000000ff},
+    {D3DFMT_A8R8G8B8, 32, 0xff000000, 0x00ff0000, 0x0000ff00,
+     0x000000ff},
+    {D3DFMT_X1R5G5B5, 16, 0x00000000, 0x00007c00, 0x000003e0,
+     0x0000001f},
+    {D3DFMT_R5G6B5, 16, 0x00000000, 0x0000f800, 0x000007e0,
+     0x0000001f},
+    {D3DFMT_A1R5G5B5, 16, 0x00008000, 0x00007c00, 0x000003e0,
+     0x0000001f},
+    {D3DFMT_A4R4G4B4, 16, 0x0000f000, 0x00000f00, 0x000000f0,
+     0x0000000f},
+    {(D3DFORMAT)-1, 0, 0, 0, 0, 0},
+};
+
+TextRenderBufferView::TextRenderBufferView()
+{
+    this->format = (D3DFORMAT)-1;
+    this->width = 0;
+    this->height = 0;
+    this->hdc = 0;
+    this->ownedBitmap = 0;
+    this->previousSelectedBitmap = 0;
+    this->bitmapBits = NULL;
+}
+
+TextRenderBufferView::~TextRenderBufferView()
+{
+    this->ReleaseBuffer();
+}
+
+bool TextRenderBufferView::ReleaseBuffer()
+{
+    if (this->hdc)
+    {
+        SelectObject(this->hdc, this->previousSelectedBitmap);
+        DeleteDC(this->hdc);
+        DeleteObject(this->ownedBitmap);
+        this->format = (D3DFORMAT)-1;
+        this->width = 0;
+        this->height = 0;
+        this->hdc = 0;
+        this->ownedBitmap = 0;
+        this->previousSelectedBitmap = 0;
+        this->bitmapBits = NULL;
+        return true;
+    }
+    else
+    {
+        return false;
+    }
+}
+
+bool TextRenderBufferView::AllocateBufferWithFallback(
+    i32 width, i32 height, D3DFORMAT format)
+{
+    if (this->TryAllocateBuffer(width, height, format))
+    {
+        return true;
+    }
+
+    if (format == D3DFMT_A1R5G5B5 || format == D3DFMT_A4R4G4B4)
+    {
+        return this->TryAllocateBuffer(width, height, D3DFMT_A8R8G8B8);
+    }
+    if (format == D3DFMT_R5G6B5)
+    {
+        return this->TryAllocateBuffer(width, height, D3DFMT_X8R8G8B8);
+    }
+    return false;
+}
+
+struct TextBitmapInfo
+{
+    BITMAPINFOHEADER header;
+    RGBQUAD colors[17];
+};
+
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char TextBitmapInfoSizeIs6C[
+    (sizeof(TextBitmapInfo) == 0x6c) ? 1 : -1];
+#endif
+
+bool TextRenderBufferView::TryAllocateBuffer(i32 width, i32 height,
+                                             D3DFORMAT format)
+{
+    struct TextRenderShallowLocals
+    {
+        HGDIOBJ originalBitmapObj;
+        HDC deviceContext;
+        i32 imageWidthInBytes;
+    } averagedPanLocal12;
+    struct TextRenderDeepLocals
+    {
+        u8 *bitmapData;
+        HBITMAP bitmapObj;
+        TextRenderFormatInfo *formatInfo;
+    } deep;
+    TextBitmapInfo bitmapInfo;
+#define bitmapData deep.bitmapData
+#define bitmapObj deep.bitmapObj
+#define formatInfo deep.formatInfo
+#define originalBitmapObj averagedPanLocal12.originalBitmapObj
+#define deviceContext averagedPanLocal12.deviceContext
+#define imageWidthInBytes averagedPanLocal12.imageWidthInBytes
+
+    this->ReleaseBuffer();
+    memset(&bitmapInfo, 0, sizeof(TextBitmapInfo));
+    formatInfo = this->GetFormatInfo(format);
+    if (formatInfo == NULL)
+    {
+        return false;
+    }
+    imageWidthInBytes =
+        ((((width * formatInfo->bitCount) / 8) + 3) / 4) * 4;
+    bitmapInfo.header.biSize = sizeof(TextBitmapInfo);
+    bitmapInfo.header.biWidth = width;
+    bitmapInfo.header.biHeight = -(height + 1);
+    bitmapInfo.header.biPlanes = 1;
+    bitmapInfo.header.biBitCount = formatInfo->bitCount;
+    bitmapInfo.header.biSizeImage = height * imageWidthInBytes;
+    if (format != D3DFMT_X1R5G5B5 && format != D3DFMT_X8R8G8B8)
+    {
+        bitmapInfo.header.biCompression = BI_BITFIELDS;
+        reinterpret_cast<u32 *>(bitmapInfo.colors)[0] = formatInfo->redMask;
+        reinterpret_cast<u32 *>(bitmapInfo.colors)[1] = formatInfo->greenMask;
+        reinterpret_cast<u32 *>(bitmapInfo.colors)[2] = formatInfo->blueMask;
+        reinterpret_cast<u32 *>(bitmapInfo.colors)[3] = formatInfo->alphaMask;
+    }
+    bitmapObj = CreateDIBSection(NULL, reinterpret_cast<BITMAPINFO *>(&bitmapInfo),
+                              DIB_RGB_COLORS,
+                              reinterpret_cast<void **>(&bitmapData), NULL, 0);
+    if (bitmapObj == NULL)
+    {
+        return false;
+    }
+    memset(bitmapData, 0, bitmapInfo.header.biSizeImage);
+    deviceContext = CreateCompatibleDC(NULL);
+    originalBitmapObj = SelectObject(deviceContext, bitmapObj);
+#undef originalBitmapObj
+#undef deviceContext
+#undef imageWidthInBytes
+    this->hdc = averagedPanLocal12.deviceContext;
+    this->ownedBitmap = bitmapObj;
+    this->bitmapBits = bitmapData;
+    this->imageSizeInBytes = bitmapInfo.header.biSizeImage;
+    this->previousSelectedBitmap = averagedPanLocal12.originalBitmapObj;
+    this->width = width;
+    this->height = height;
+    this->format = format;
+    this->imageWidthInBytes = averagedPanLocal12.imageWidthInBytes;
+#ifdef TH095_IOS
+    char textBufferLog[180];
+    snprintf(textBufferLog, sizeof(textBufferLog), "text-buffer: allocated bits=%p bytes=%u stride=%d size=%d,%d", this->bitmapBits, this->imageSizeInBytes, this->imageWidthInBytes, this->width, this->height);
+    modern::LogStartup(textBufferLog);
+#endif
+#undef bitmapData
+#undef bitmapObj
+#undef formatInfo
+    return true;
+}
+
+TextRenderFormatInfo *TextRenderBufferView::GetFormatInfo(D3DFORMAT format)
+{
+    i32 formatIndex;
+
+    for (formatIndex = 0;
+         g_TextRenderFormatInfoArray[formatIndex].format != -1 &&
+         g_TextRenderFormatInfoArray[formatIndex].format != format;
+         formatIndex++)
+    {
+    }
+    if (format == -1)
+    {
+        return NULL;
+    }
+    return &g_TextRenderFormatInfoArray[formatIndex];
+}
+
+void TextHelperView::CreateTextBuffer()
+{
+    u32 index;
+
+    g_TextRenderBuffer.AllocateBufferWithFallback(1024, 64,
+                                                   D3DFMT_A4R4G4B4);
+    for (index = 0; index < 256; index++)
+    {
+        g_TextRenderBuffer.unknown000[index] =
+            static_cast<u8>((g_Rng.GetRandomU16() >> 8) / 2);
+    }
+    g_TextFontWidth17OrLess = CreateFontA(
+        30, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, SHIFTJIS_CHARSET,
+        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+        FIXED_PITCH | FF_ROMAN,
+        "\x82\x6c\x82\x72\x20\x83\x53\x83\x56\x83\x62\x83\x4e");
+    g_TextFontWidth18 = CreateFontA(
+        34, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, SHIFTJIS_CHARSET,
+        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+        FIXED_PITCH | FF_ROMAN,
+        "\x82\x6c\x82\x72\x20\x83\x53\x83\x56\x83\x62\x83\x4e");
+    g_TextFontWidth19 = CreateFontA(
+        36, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, SHIFTJIS_CHARSET,
+        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+        FIXED_PITCH | FF_ROMAN,
+        "\x82\x6c\x82\x72\x20\x83\x53\x83\x56\x83\x62\x83\x4e");
+    g_TextFontWidth20OrMore = CreateFontA(
+        38, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, SHIFTJIS_CHARSET,
+        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+        FIXED_PITCH | FF_ROMAN,
+        "\x82\x6c\x82\x72\x20\x83\x53\x83\x56\x83\x62\x83\x4e");
+}
+
+void TextHelperView::ReleaseTextBuffer()
+{
+    g_TextRenderBuffer.ReleaseBuffer();
+    DeleteObject(g_TextFontWidth17OrLess);
+    DeleteObject(g_TextFontWidth18);
+    DeleteObject(g_TextFontWidth19);
+    DeleteObject(g_TextFontWidth20OrMore);
+#if defined(TH095_MODERN_PORT)
+    // The portable shutdown path can be reached more than once when SDL
+    // tears down its UIKit host.  Win32's GDI handles tolerate repeated
+    // cleanup through the owner bookkeeping; clear the emulated handles so a
+    // second callback cannot delete a dangling C++ object.
+    g_TextFontWidth17OrLess = NULL;
+    g_TextFontWidth18 = NULL;
+    g_TextFontWidth19 = NULL;
+    g_TextFontWidth20OrMore = NULL;
+#endif
+}
+
+bool TextRenderBufferView::InvertAlpha(i32 rowCount, BOOL unused)
+{
+    struct
+    {
+        i32 imageWidthInBytes;
+        PixelArgb1555 *bufferCursor;
+        i32 regionByteCount;
+        i32 byteOffset;
+        u8 *bufferRegion;
+    } locals;
+
+    (void)unused;
+    locals.imageWidthInBytes = this->imageWidthInBytes;
+    locals.regionByteCount = locals.imageWidthInBytes * rowCount;
+    locals.bufferRegion = this->bitmapBits;
+
+    switch (this->format)
+    {
+    case D3DFMT_A8R8G8B8:
+        for (locals.byteOffset = 3;
+             locals.byteOffset < locals.regionByteCount;
+             locals.byteOffset += 4)
+        {
+            locals.bufferRegion[locals.byteOffset] ^= 0xff;
+        }
+        break;
+
+    case D3DFMT_A1R5G5B5:
+    {
+        locals.bufferCursor =
+            reinterpret_cast<PixelArgb1555 *>(locals.bufferRegion);
+        for (locals.byteOffset = 0;
+             locals.byteOffset < locals.regionByteCount;
+             locals.byteOffset += 2, locals.bufferCursor++)
+        {
+            locals.bufferCursor->alpha ^= 1;
+            if (locals.bufferCursor->alpha != 0)
+            {
+            }
+            else
+            {
+                locals.bufferCursor->red = 0;
+                locals.bufferCursor->green = 0;
+                locals.bufferCursor->blue = 0;
+            }
+        }
+        break;
+    }
+
+    case D3DFMT_A4R4G4B4:
+        for (locals.byteOffset = 1;
+             locals.byteOffset < locals.regionByteCount;
+             locals.byteOffset += 2)
+        {
+            locals.bufferRegion[locals.byteOffset] ^= 0xf0;
+        }
+        break;
+
+    default:
+        return false;
+    }
+    return true;
+}
+
+struct TextAlphaArgb8888Locals
+{
+    u32 sums[3];
+    u32 *pixel;
+    u32 neighborCount;
+    u32 x;
+    u32 y;
+};
+
+struct TextAlphaArgb4444Locals
+{
+    u32 sums[3];
+    PixelArgb4444 *pixel;
+    u32 neighborCount;
+    u32 x;
+    u32 y;
+};
+
+struct TextAlphaCaseLocals
+{
+    TextAlphaArgb4444Locals argb4444;
+    TextAlphaArgb8888Locals argb8888;
+};
+
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char TextAlphaCaseLocalsSizeIs38[
+    (sizeof(TextAlphaCaseLocals) == 0x38) ? 1 : -1];
+#endif
+
+// The TH095 target keeps the two 0x1C pixel-format records contiguous at
+// EBP-0x48..EBP-0x14. The remaining scalar locals follow VC7.1 identifier-hash
+// chains. These backing identifiers reproduce the target's real local order;
+// no padding or inactive scratch storage is involved.
+#define bleedImageWidth textImageWidthLocal06
+#define bleedRegionBytes bufferRegion
+#define bleedBuffer restartCommandProcessingLocal05
+#define bleedUnusedFlag averagedPanLocal12
+#define bleedArgb8888UpperPitch regionByteCount
+#define bleedArgb8888LowerPitch argb4444LowerPitch
+#define bleedArgb4444UpperPitch textArgb4444UpperLocal005
+#define bleedArgb4444LowerPitch argb8888LowerPitch
+bool TextRenderBufferView::ApplyAlphaBleed(i32 rowCount)
+{
+    i32 bleedImageWidth;
+    i32 bleedRegionBytes;
+    u8 *bleedBuffer;
+    TextRenderBufferView *self;
+    bool bleedUnusedFlag;
+    i32 bleedArgb8888UpperPitch;
+    i32 bleedArgb8888LowerPitch;
+    i32 bleedArgb4444UpperPitch;
+    i32 bleedArgb4444LowerPitch;
+    TextAlphaCaseLocals cases;
+
+    bleedImageWidth = this->imageWidthInBytes;
+    bleedRegionBytes = bleedImageWidth * rowCount;
+    bleedBuffer = this->bitmapBits;
+    self = this;
+    bleedUnusedFlag = false;
+    (void)bleedRegionBytes;
+    (void)bleedBuffer;
+    (void)self;
+    (void)bleedUnusedFlag;
+
+    switch (this->format)
+    {
+    case D3DFMT_A8R8G8B8:
+        cases.argb8888.pixel = reinterpret_cast<u32 *>(this->bitmapBits);
+        for (cases.argb8888.y = 0;
+             cases.argb8888.y < static_cast<u32>(rowCount);
+             cases.argb8888.y++)
+        {
+            for (cases.argb8888.x = 0;
+                 cases.argb8888.x < static_cast<u32>(this->width);
+                 cases.argb8888.x++)
+            {
+                if (reinterpret_cast<u8 *>(cases.argb8888.pixel)[3] == 0)
+                {
+                    cases.argb8888.sums[2] = 0;
+                    cases.argb8888.sums[1] = cases.argb8888.sums[2];
+                    cases.argb8888.sums[0] = cases.argb8888.sums[1];
+                    cases.argb8888.neighborCount = 0;
+                    if (cases.argb8888.x > 0)
+                    {
+                        AccumulateArgb8888Neighbor(
+                            cases.argb8888.sums,
+                            reinterpret_cast<u8 *>(cases.argb8888.pixel - 1),
+                            &cases.argb8888.neighborCount);
+                    }
+                    if (cases.argb8888.x <
+                        static_cast<u32>(this->width - 1))
+                    {
+                        AccumulateArgb8888Neighbor(
+                            cases.argb8888.sums,
+                            reinterpret_cast<u8 *>(cases.argb8888.pixel + 1),
+                            &cases.argb8888.neighborCount);
+                    }
+                    if (cases.argb8888.y > 0)
+                    {
+                        bleedArgb8888UpperPitch = this->imageWidthInBytes;
+                        AccumulateArgb8888Neighbor(
+                            cases.argb8888.sums,
+                            reinterpret_cast<u8 *>(
+                                cases.argb8888.pixel +
+                                (-bleedArgb8888UpperPitch) / 4),
+                            &cases.argb8888.neighborCount);
+                    }
+                    if (cases.argb8888.y <
+                        static_cast<u32>(this->height - 1))
+                    {
+                        bleedArgb8888LowerPitch = this->imageWidthInBytes;
+                        AccumulateArgb8888Neighbor(
+                            cases.argb8888.sums,
+                            reinterpret_cast<u8 *>(
+                                cases.argb8888.pixel +
+                                bleedArgb8888LowerPitch / 4),
+                            &cases.argb8888.neighborCount);
+                    }
+                    if (cases.argb8888.neighborCount > 1)
+                    {
+                        cases.argb8888.sums[0] /=
+                            cases.argb8888.neighborCount;
+                        cases.argb8888.sums[1] /=
+                            cases.argb8888.neighborCount;
+                        cases.argb8888.sums[2] /=
+                            cases.argb8888.neighborCount;
+                    }
+                    reinterpret_cast<u8 *>(cases.argb8888.pixel)[2] =
+                        static_cast<u8>(cases.argb8888.sums[0]);
+                    reinterpret_cast<u8 *>(cases.argb8888.pixel)[1] =
+                        static_cast<u8>(cases.argb8888.sums[1]);
+                    reinterpret_cast<u8 *>(cases.argb8888.pixel)[0] =
+                        static_cast<u8>(cases.argb8888.sums[2]);
+                }
+                cases.argb8888.pixel++;
+            }
+        }
+        break;
+
+    case D3DFMT_A4R4G4B4:
+        cases.argb4444.pixel =
+            reinterpret_cast<PixelArgb4444 *>(this->bitmapBits);
+        for (cases.argb4444.y = 0;
+             cases.argb4444.y < static_cast<u32>(rowCount);
+             cases.argb4444.y++)
+        {
+            for (cases.argb4444.x = 0;
+                 cases.argb4444.x < static_cast<u32>(this->width);
+                 cases.argb4444.x++)
+            {
+                if (cases.argb4444.pixel->alpha == 0)
+                {
+                    cases.argb4444.sums[2] = 0;
+                    cases.argb4444.sums[1] = cases.argb4444.sums[2];
+                    cases.argb4444.sums[0] = cases.argb4444.sums[1];
+                    cases.argb4444.neighborCount = 0;
+                    if (cases.argb4444.x > 0)
+                    {
+                        AccumulateArgb4444Neighbor(
+                            cases.argb4444.sums, cases.argb4444.pixel - 1,
+                            &cases.argb4444.neighborCount);
+                    }
+                    if (cases.argb4444.x <
+                        static_cast<u32>(this->width - 1))
+                    {
+                        AccumulateArgb4444Neighbor(
+                            cases.argb4444.sums, cases.argb4444.pixel + 1,
+                            &cases.argb4444.neighborCount);
+                    }
+                    if (cases.argb4444.y > 0)
+                    {
+                        bleedArgb4444UpperPitch = this->imageWidthInBytes;
+                        AccumulateArgb4444Neighbor(
+                            cases.argb4444.sums,
+                            cases.argb4444.pixel +
+                                (-bleedArgb4444UpperPitch) / 2,
+                            &cases.argb4444.neighborCount);
+                    }
+                    if (cases.argb4444.y <
+                        static_cast<u32>(this->height - 1))
+                    {
+                        bleedArgb4444LowerPitch = this->imageWidthInBytes;
+                        AccumulateArgb4444Neighbor(
+                            cases.argb4444.sums,
+                            cases.argb4444.pixel +
+                                bleedArgb4444LowerPitch / 2,
+                            &cases.argb4444.neighborCount);
+                    }
+                    if (cases.argb4444.neighborCount > 1)
+                    {
+                        cases.argb4444.sums[0] /=
+                            cases.argb4444.neighborCount;
+                        cases.argb4444.sums[1] /=
+                            cases.argb4444.neighborCount;
+                        cases.argb4444.sums[2] /=
+                            cases.argb4444.neighborCount;
+                    }
+                    cases.argb4444.pixel->red =
+                        static_cast<u8>(cases.argb4444.sums[0]);
+                    cases.argb4444.pixel->green =
+                        static_cast<u8>(cases.argb4444.sums[1]);
+                    cases.argb4444.pixel->blue =
+                        static_cast<u8>(cases.argb4444.sums[2]);
+                }
+                cases.argb4444.pixel++;
+            }
+        }
+        break;
+    }
+    return true;
+}
+#undef bleedImageWidth
+#undef bleedRegionBytes
+#undef bleedBuffer
+#undef bleedUnusedFlag
+#undef bleedArgb8888UpperPitch
+#undef bleedArgb8888LowerPitch
+#undef bleedArgb4444UpperPitch
+#undef bleedArgb4444LowerPitch
+
+struct TextBoldUploadLocals
+{
+    u8 *sourceBits;
+    D3DFORMAT sourceFormat;
+    i32 sourcePitch;
+    IDirect3DSurface8 *destinationSurface;
+    RECT destination;
+    RECT source;
+};
+
+struct TextBoldGdiLocals
+{
+    HGDIOBJ previousFont;
+    HFONT font;
+    HDC hdc;
+    i32 textLength;
+};
+
+struct TextBoldLocals
+{
+    TextBoldUploadLocals upload;
+    TextBoldGdiLocals gdi;
+};
+
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char TextBoldUploadLocalsSizeIs30[(sizeof(TextBoldUploadLocals) == 0x30) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char TextBoldGdiLocalsSizeIs10[(sizeof(TextBoldGdiLocals) == 0x10) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char TextBoldLocalsSizeIs40[(sizeof(TextBoldLocals) == 0x40) ? 1 : -1];
+#endif
+
+void TextHelperView::RenderTextToTextureBold(
+    i32 x, i32 y, i32 width, i32 height, i32 glyphWidth,
+    i32 glyphHeight, COLORREF textColor, COLORREF shadowColor,
+    const char *text, IDirect3DTexture8 *texture)
+{
+    TextBoldLocals locals;
+#ifdef TH095_IOS
+    char textDrawLog[180];
+    snprintf(textDrawLog, sizeof(textDrawLog), "text-buffer: draw bits=%p bytes=%u stride=%d glyph=%d,%d target=%p", g_TextRenderBuffer.bitmapBits, g_TextRenderBuffer.imageSizeInBytes, g_TextRenderBuffer.imageWidthInBytes, glyphWidth, glyphHeight, texture);
+    modern::LogStartup(textDrawLog);
+#endif
+
+    locals.gdi.font = glyphWidth <= 17 ? g_TextFontWidth17OrLess
+                     : glyphWidth <= 18 ? g_TextFontWidth18
+                     : glyphWidth <= 19 ? g_TextFontWidth19
+                                        : g_TextFontWidth20OrMore;
+
+    memset(g_TextRenderBuffer.bitmapBits, 0,
+           g_TextRenderBuffer.imageSizeInBytes);
+    locals.gdi.hdc = g_TextRenderBuffer.hdc;
+    locals.gdi.previousFont = SelectObject(locals.gdi.hdc, locals.gdi.font);
+    g_TextRenderBuffer.InvertAlpha(glyphWidth * 2 + 6, FALSE);
+    SetBkMode(locals.gdi.hdc, TRANSPARENT);
+
+    locals.gdi.textLength = strlen(text);
+    SetTextColor(locals.gdi.hdc, 0);
+    TextOutA(locals.gdi.hdc, x * 2 + 3, 3, text, locals.gdi.textLength);
+    SetTextColor(locals.gdi.hdc, textColor);
+    TextOutA(locals.gdi.hdc, x * 2, 0, text, locals.gdi.textLength);
+
+    SelectObject(locals.gdi.hdc, locals.gdi.previousFont);
+    g_TextRenderBuffer.InvertAlpha(
+        glyphWidth * 2 + 6, shadowColor == 0xffffffff);
+    g_TextRenderBuffer.ApplyAlphaBleed(glyphWidth * 2 + 6);
+    SelectObject(locals.gdi.hdc, locals.gdi.previousFont);
+
+    locals.upload.destination.left = 0;
+    locals.upload.destination.top = y;
+    locals.upload.destination.right = width;
+    locals.upload.destination.bottom = y + glyphHeight;
+    locals.upload.source.left = 0;
+    locals.upload.source.top = 0;
+    locals.upload.source.right = width * 2;
+    locals.upload.source.bottom = glyphWidth * 2;
+    if (locals.upload.source.right > 1024)
+    {
+        locals.upload.source.right = 1024;
+    }
+
+    texture->GetSurfaceLevel(0, &locals.upload.destinationSurface);
+    locals.upload.sourcePitch = g_TextRenderBuffer.imageWidthInBytes;
+    locals.upload.sourceFormat = g_TextRenderBuffer.format;
+    locals.upload.sourceBits = g_TextRenderBuffer.bitmapBits;
+    D3DXLoadSurfaceFromMemory(
+        locals.upload.destinationSurface, NULL, &locals.upload.destination,
+        locals.upload.sourceBits, locals.upload.sourceFormat,
+        locals.upload.sourcePitch, NULL, &locals.upload.source,
+        D3DX_FILTER_TRIANGLE, 0);
+    if (locals.upload.destinationSurface != NULL)
+    {
+        locals.upload.destinationSurface->Release();
+        locals.upload.destinationSurface = NULL;
+    }
+}
+
+} // namespace th095

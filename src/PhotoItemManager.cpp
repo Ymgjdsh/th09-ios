@@ -1,0 +1,376 @@
+#ifdef TH095_MATCH_EXACT
+#include "PhotoItemManagerExact.inl"
+#else
+#include "PhotoItemManager.hpp"
+#include "PhotoBulletManager.hpp"
+#include "GameplayGlobals.hpp"
+#ifndef DIFFBUILD
+#include "PhotoPlayerRuntime.hpp"
+#endif
+#include "SoundPlayer.hpp"
+
+namespace th095
+{
+
+#ifndef DIFFBUILD
+#define g_ItemManager \
+    TH095_RUNTIME_GLOBAL_PTR(PhotoItemManagerView, g_RuntimeItemManagerOwner)
+#endif
+
+#define g_PhotoBulletManager \
+    TH095_RUNTIME_GLOBAL_PTR(PhotoBulletManagerView, g_RuntimeBulletManagerOwner)
+
+struct ItemPhotoGameView
+{
+    u8 unknown0000[0x1e30];
+    Float3 playerPosition;            // +0x1e30
+    u8 unknown1e3c[0x29bc - 0x1e3c];
+    f32 cameraCharge;                 // +0x29bc
+    u8 unknown29c0[0x29e4 - 0x29c0];
+    i32 photoIndex;                   // +0x29e4
+    u8 unknown29e8[0x29f0 - 0x29e8];
+    u32 cameraFlags;                  // +0x29f0
+    u8 unknown29f4[0x2a28 - 0x29f4];
+    Float3 photoTargetBoundsMin;      // +0x2a28
+    Float3 photoTargetBoundsMax;      // +0x2a34
+};
+
+struct ItemGlobalStateView
+{
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+    // Ten native subsystem pointers precede the task timer/configuration.
+    u8 unknown000[0xfc + 10 * (sizeof(void *) - 4)];
+#else
+    u8 unknown000[0xfc];
+#endif
+    union
+    {
+        u32 flags;
+        struct
+        {
+            u32 captureActive : 1;
+            u32 unknownFlag1 : 1;
+            u32 gameplayLoadActive : 1;
+            u32 unknownFlags3_8 : 6;
+            u32 photoSoundSuppressed : 1;
+            u32 photoTransitionActive : 1;
+            u32 unknownFlags11_31 : 21;
+        };
+    };
+};
+
+extern ItemPhotoGameView *g_PhotoGame;
+extern ItemGlobalStateView *g_PhotoGlobalState;
+
+#ifndef DIFFBUILD
+#define g_PhotoGame \
+    TH095_RUNTIME_GLOBAL_PTR(ItemPhotoGameView, g_RuntimePlayerOwner)
+#define g_PhotoGlobalState \
+    TH095_RUNTIME_GLOBAL_PTR(ItemGlobalStateView, g_RuntimeGlobalStateOwner)
+#endif
+
+#ifdef DIFFBUILD
+#define TH095_ITEM_PLAYER_POSITION (g_PhotoGame->playerPosition)
+#define TH095_ITEM_CAMERA_CHARGE(game) ((game)->cameraCharge)
+#define TH095_ITEM_PHOTO_INDEX (g_PhotoGame->photoIndex)
+#define TH095_ITEM_CAMERA_FLAGS (g_PhotoGame->cameraFlags)
+#define TH095_ITEM_PHOTO_TARGET_BOUNDS_MIN (g_PhotoGame->photoTargetBoundsMin)
+#define TH095_ITEM_PHOTO_TARGET_BOUNDS_MAX (g_PhotoGame->photoTargetBoundsMax)
+#else
+#define TH095_ITEM_PLAYER_POSITION \
+    (TH095_RUNTIME_GLOBAL_PTR(PhotoPlayerRuntimeView, g_RuntimePlayerOwner)->playerPosition)
+#define TH095_ITEM_CAMERA_CHARGE(game) \
+    (TH095_RUNTIME_GLOBAL_PTR(PhotoPlayerRuntimeView, g_RuntimePlayerOwner)->camera.charge)
+#define TH095_ITEM_PHOTO_INDEX \
+    (TH095_RUNTIME_GLOBAL_PTR(PhotoPlayerRuntimeView, g_RuntimePlayerOwner)->camera.photoIndex)
+#define TH095_ITEM_CAMERA_FLAGS \
+    (TH095_RUNTIME_GLOBAL_PTR(PhotoPlayerRuntimeView, g_RuntimePlayerOwner)->camera.flags)
+#define TH095_ITEM_PHOTO_TARGET_BOUNDS_MIN \
+    (TH095_RUNTIME_GLOBAL_PTR(PhotoPlayerRuntimeView, g_RuntimePlayerOwner)->photoTargetBoundsMin)
+#define TH095_ITEM_PHOTO_TARGET_BOUNDS_MAX \
+    (TH095_RUNTIME_GLOBAL_PTR(PhotoPlayerRuntimeView, g_RuntimePlayerOwner)->photoTargetBoundsMax)
+#endif
+
+Float3 *__fastcall PhotoToScreen(Float3 *output, const Float3 *position);
+
+static inline i32 ItemEitherFlag(i32 first, i32 second)
+{
+    return first | second;
+}
+
+PhotoItemView::PhotoItemView()
+{
+}
+
+PhotoItemView::~PhotoItemView()
+{
+}
+
+PhotoItemManagerView::PhotoItemManagerView()
+{
+    utils::DebugPrint("initialize ItemInf\n");
+    memset(this, 0, sizeof(*this));
+    g_ItemManager = this;
+}
+
+PhotoItemManagerView::~PhotoItemManagerView()
+{
+    utils::DebugPrint("shutdown ItemInf\n");
+    g_Chain.Cut(this->calcChain);
+    g_Chain.Cut(this->drawChain);
+    g_ItemManager = NULL;
+}
+
+i32 PhotoItemManagerView::Initialize()
+{
+    return 0;
+}
+
+PhotoItemManagerView *PhotoItemManagerView::Create()
+{
+    struct
+    {
+        PhotoItemManagerView *manager;
+        ChainElem *elem;
+    } locals;
+
+#define manager locals.manager
+#define elem locals.elem
+
+    manager = new PhotoItemManagerView();
+    if (manager->Initialize() != 0)
+    {
+        goto failure;
+    }
+
+    elem = g_Chain.CreateElem(
+        reinterpret_cast<ChainCallback>(PhotoItemManagerView::OnUpdate));
+    elem->arg = manager;
+    g_Chain.AddToCalcChain(elem, 0xf);
+    manager->calcChain = elem;
+
+    elem = g_Chain.CreateElem(
+        reinterpret_cast<ChainCallback>(PhotoItemManagerView::OnDraw));
+    elem->arg = manager;
+    g_Chain.AddToDrawChain(elem, 0x10);
+    manager->drawChain = elem;
+    return manager;
+
+failure:
+    if (manager != NULL)
+    {
+        delete manager;
+        manager = NULL;
+    }
+#undef elem
+#undef manager
+    return NULL;
+}
+
+void PhotoItemManagerView::Destroy()
+{
+    PhotoItemManagerView *manager = this;
+    if (manager != NULL)
+    {
+        delete manager;
+        manager = NULL;
+    }
+}
+
+static __forceinline Float3 ScaleItemVector(f32 scalar, const Float3 &value)
+{
+    return Float3(scalar * value.x, scalar * value.y, scalar * value.z);
+}
+
+static __forceinline void NormalizeAndScaleItemVelocity(
+    const Float3 &direction, Float3 *velocity, f32 acceleration)
+{
+    D3DXVec3Normalize(
+        reinterpret_cast<D3DXVECTOR3 *>(velocity),
+        reinterpret_cast<const D3DXVECTOR3 *>(&direction));
+    *velocity *= acceleration;
+}
+
+static __forceinline void AddIndexedItemCameraCharge(
+    ItemPhotoGameView *game, i32 photoIndex)
+{
+    TH095_ITEM_CAMERA_CHARGE(game) += static_cast<f32>(photoIndex) * 0.0002f + 0.0016f;
+    if (TH095_ITEM_CAMERA_CHARGE(game) > 1.0f)
+        TH095_ITEM_CAMERA_CHARGE(game) = 1.0f;
+}
+
+static __forceinline void AddFixedItemCameraCharge(ItemPhotoGameView *game)
+{
+    TH095_ITEM_CAMERA_CHARGE(game) += 0.004f;
+    if (TH095_ITEM_CAMERA_CHARGE(game) > 1.0f)
+        TH095_ITEM_CAMERA_CHARGE(game) = 1.0f;
+}
+
+i32 PhotoItemManagerView::Update()
+{
+    struct UpdateLocals
+    {
+        Float3 boundsMin;
+        Float3 boundsMax;
+        i32 index;
+        PhotoItemView *item;
+        Float3 direction;
+    } locals;
+    locals.item = &this->items[0];
+    for (locals.index = 0; locals.index < 150; locals.index++, locals.item++)
+    {
+        if (locals.item->active == 0)
+        {
+            continue;
+        }
+        if (locals.item->timer < 4)
+        {
+            goto tick;
+        }
+
+        if (locals.item->timer < 20)
+        {
+            locals.item->position +=
+                ScaleItemVector(
+                    20.0f - static_cast<f32>(locals.item->timer),
+                    locals.item->velocity) / 20.0f;
+        }
+        else
+        {
+            locals.direction = TH095_ITEM_PLAYER_POSITION - locals.item->position;
+            NormalizeAndScaleItemVelocity(
+                locals.direction, &locals.item->velocity,
+                locals.item->acceleration);
+            locals.item->position += locals.item->velocity;
+            if (locals.item->acceleration < 8.0f)
+            {
+                locals.item->acceleration += 0.1f;
+            }
+        }
+
+        locals.boundsMin.x = locals.item->position.x - 0.0f;
+        locals.boundsMin.y = locals.item->position.y - 0.0f;
+        locals.boundsMax.x = locals.item->position.x + 0.0f;
+        locals.boundsMax.y = locals.item->position.y + 0.0f;
+        if (!(TH095_ITEM_PHOTO_TARGET_BOUNDS_MIN.x > locals.boundsMax.x ||
+              TH095_ITEM_PHOTO_TARGET_BOUNDS_MIN.y > locals.boundsMax.y ||
+              TH095_ITEM_PHOTO_TARGET_BOUNDS_MAX.x < locals.boundsMin.x ||
+              TH095_ITEM_PHOTO_TARGET_BOUNDS_MAX.y < locals.boundsMin.y))
+        {
+            locals.item->active = 0;
+            if ((TH095_ITEM_CAMERA_FLAGS & 1) != 0)
+            {
+                AddIndexedItemCameraCharge(
+                    g_PhotoGame, TH095_ITEM_PHOTO_INDEX);
+            }
+            else
+            {
+                AddFixedItemCameraCharge(g_PhotoGame);
+            }
+            if (g_PhotoGlobalState->photoSoundSuppressed == 0)
+            {
+                g_SoundPlayer.PlaySoundPositionedByIdx(
+                    static_cast<SoundIdx>(0x14), locals.item->position.x);
+            }
+            continue;
+        }
+
+        AnmManager::ExecuteScript(&locals.item->vm);
+tick:
+        locals.item->timer.Tick();
+    }
+    return 1;
+}
+
+#undef TH095_ITEM_PHOTO_TARGET_BOUNDS_MAX
+#undef TH095_ITEM_PHOTO_TARGET_BOUNDS_MIN
+#undef TH095_ITEM_CAMERA_FLAGS
+#undef TH095_ITEM_PHOTO_INDEX
+#undef TH095_ITEM_CAMERA_CHARGE
+#undef TH095_ITEM_PLAYER_POSITION
+
+i32 PhotoItemManagerView::Draw()
+{
+    PhotoItemView *item = &this->items[0];
+    for (i32 index = 0; index < 150; index++, item++)
+    {
+        if (item->active == 0)
+        {
+            continue;
+        }
+        if (item->timer < 4)
+        {
+            continue;
+        }
+        PhotoToScreen(&item->vm.positionOffset, &item->position);
+        item->vm.Draw();
+    }
+    return 1;
+}
+
+i32 __fastcall PhotoItemManagerView::OnUpdate(PhotoItemManagerView *manager)
+{
+    if (ItemEitherFlag(
+            g_PhotoGlobalState->captureActive,
+            g_PhotoGlobalState->gameplayLoadActive) != 0)
+    {
+        return 1;
+    }
+    if (g_PhotoGlobalState->photoTransitionActive != 0)
+    {
+        return 1;
+    }
+    return manager->Update();
+}
+
+i32 __fastcall PhotoItemManagerView::OnDraw(PhotoItemManagerView *manager)
+{
+    if (g_PhotoGlobalState->gameplayLoadActive != 0)
+    {
+        return 1;
+    }
+    return manager->Draw();
+}
+
+static __forceinline void PhotoItemSpawnVmSetupPhase(PhotoItemView *item, u32 color)
+{
+    u8 compilerStorage[0x2c];
+    g_PhotoBulletManager->bulletAnm->InitializeVm(&item->vm, 0x120);
+    item->vm.color1.color = color;
+}
+
+#define item averagedPanLocal12
+i32 PhotoItemManagerView::Spawn(i32 type, Float3 *position, u32 color)
+{
+    PhotoItemView *item = &this->items[0];
+    i32 index = 0;
+
+    goto checkSlot;
+nextSlot:
+    index++;
+    item++;
+checkSlot:
+    if (index < 150)
+    {
+        if (item->active != 0)
+        {
+            goto nextSlot;
+        }
+
+        item->active = 1;
+        item->position = *position;
+        item->velocity.x = g_Rng.GetRandomF32Signed() * 1.0f;
+        item->velocity.y = g_Rng.GetRandomF32() * 2.0f + 2.0f;
+        item->velocity.z = 0.0f;
+        item->timer = 0;
+        item->acceleration = 0.0f;
+        PhotoItemSpawnVmSetupPhase(item, color);
+    }
+finished:
+    return 0;
+}
+#undef item
+
+} // namespace th095
+
+#endif // TH095_MATCH_EXACT

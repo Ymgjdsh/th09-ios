@@ -1,0 +1,341 @@
+#ifdef TH095_MATCH_EXACT
+#include "PhotoCardInfoExact.inl"
+#else
+#include "AnmText.hpp"
+#include "AnmVmId.hpp"
+#include "AsciiManager.hpp"
+#include "GameplayGlobals.hpp"
+#include "PhotoGameTask.hpp"
+#include "PhotoPlayerRuntime.hpp"
+#include "PhotoStage.hpp"
+#include "Main.hpp"
+#include "PhotoCardInfo.hpp"
+#include "utils.hpp"
+
+#include <string.h>
+
+namespace th095
+{
+
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+using PhotoCardStageStateView = PhotoStageStateView;
+#else
+struct PhotoCardStageStateView
+{
+    u8 unknown000[0x25720];
+#ifdef DIFFBUILD
+    u32 flags;
+#else
+    union
+    {
+        u32 flags;
+        struct
+        {
+            u32 unknownFlag0 : 1;
+            u32 unknownFlag1 : 1;
+            u32 firstCaptureFrame : 1;
+            u32 unknownFlags3 : 29;
+        };
+    };
+#endif
+};
+#endif
+
+struct PhotoCardGameRuntimeView
+{
+    u8 unknown000[offsetof(PhotoPlayerRuntimeView, playerPosition) + offsetof(Float3, y)];
+    f32 hudFade;
+};
+
+struct PhotoCardGameTaskView
+{
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+    u8 unknown000[offsetof(PhotoGameTaskView, flags)];
+#else
+    u8 unknown000[0xfc];
+#endif
+#ifdef DIFFBUILD
+    u32 flags;
+#else
+    union
+    {
+        u32 flags;
+        struct
+        {
+            u32 unknownFlags0_1 : 2;
+            u32 gameplayLoadActive : 1;
+            u32 unknownFlags3_9 : 7;
+            u32 photoTransitionActive : 1;
+            u32 unknownFlags11_31 : 21;
+        };
+    };
+#endif
+};
+
+#ifndef DIFFBUILD
+PhotoCardInfoView *g_PhotoCardInfo = NULL;
+#endif
+extern AnmLoaded *g_PhotoCardBackgroundAnm;
+extern AnmLoaded *g_PhotoCardUiAnm;
+extern PhotoCardStageStateView *g_PhotoCardStageState;
+extern PhotoCardGameRuntimeView *g_PhotoCardGameRuntime;
+extern PhotoCardGameTaskView *g_PhotoCardGameTask;
+extern u32 g_PhotoScreenFadeColor;
+
+#ifndef DIFFBUILD
+// The canonical exact unit and target Initialize instructions identify these
+// previously unmapped production views: 0x004B2020 is
+// g_AsciiManager.asciiAnm, while 0x004C4AAC is g_Supervisor.textAnm.  Reuse
+// those loaded-ANM lifecycles instead of introducing independent pointers.
+#define g_PhotoCardBackgroundAnm (g_AsciiManager.asciiAnm)
+#define g_PhotoCardUiAnm (g_Supervisor.textAnm)
+#define g_PhotoCardStageState \
+    TH095_RUNTIME_GLOBAL_PTR(PhotoCardStageStateView, g_RuntimeStageStateOwner)
+#define g_PhotoCardGameRuntime \
+    TH095_RUNTIME_GLOBAL_PTR(PhotoCardGameRuntimeView, g_RuntimePlayerOwner)
+#define g_PhotoCardGameTask \
+    TH095_RUNTIME_GLOBAL_PTR(PhotoCardGameTaskView, g_RuntimeGlobalStateOwner)
+#endif
+
+static __forceinline void CreatePhotoCardBackgroundVm(
+    PhotoCardInfoView *cardInfo)
+{
+    Float3 position;
+    position.x = 0.0f;
+    position.y = 0.0f;
+    position.z = 0.0f;
+    cardInfo->backgroundVmId =
+        g_PhotoCardBackgroundAnm->CreateVmAtWorld(1, &position);
+}
+
+static __forceinline void CreatePhotoCardTextVm(
+    PhotoCardInfoView *cardInfo)
+{
+    Float3 position;
+    position.x = 0.0f;
+    position.y = 0.0f;
+    position.z = 0.0f;
+    cardInfo->textVmId =
+        g_PhotoCardUiAnm->CreateVmAtWorld(0x1e, &position);
+}
+
+// FUNCTION: TH095 0x00408610.
+PhotoCardInfoView::PhotoCardInfoView()
+{
+    utils::DebugPrint("Ainitialize CardInf\n");
+    memset(this, 0, sizeof(PhotoCardInfoView));
+    g_PhotoCardInfo = this;
+}
+
+// FUNCTION: TH095 0x00408670.
+i32 PhotoCardInfoView::Initialize(char *encodedText)
+{
+    for (i32 index = 0; index < 0x30; ++index)
+    {
+        this->text[index] = encodedText[index] ^ 0xaa;
+    }
+
+    CreatePhotoCardBackgroundVm(this);
+    CreatePhotoCardTextVm(this);
+
+    reinterpret_cast<AnmTextManagerView *>(g_AnmManager)
+        ->DrawTextRight(
+            reinterpret_cast<AnmTextVmView *>(
+                g_AnmManager->GetVm(this->textVmId)),
+            0xffffff, 0, this->text);
+    this->savedScreenFadeColor = TH095_BACKBUFFER_CLEAR_COLOR;
+    return 0;
+}
+
+// FUNCTION: TH095 0x00408760.
+PhotoCardInfoView::~PhotoCardInfoView()
+{
+    utils::DebugPrint("shutdown CardInf\n");
+    g_Chain.Cut(this->calcChain);
+    g_Chain.Cut(this->drawChain);
+    g_AnmManager->MarkVmForDeletion(this->backgroundVmId);
+    g_AnmManager->MarkVmForDeletion(this->textVmId);
+    g_PhotoCardInfo = NULL;
+}
+
+// FUNCTION: TH095 0x004087D0.
+i32 PhotoCardInfoView::Show()
+{
+    g_AnmManager->SetInterrupt(this->backgroundVmId, 1);
+    g_AnmManager->SetInterrupt(this->textVmId, 1);
+    this->state = PHOTO_CARD_INFO_STATE_FINISHING;
+    this->timer = 0;
+    TH095_BACKBUFFER_CLEAR_COLOR = this->savedScreenFadeColor;
+    return 0;
+}
+
+// FUNCTION: TH095 0x00408850.
+PhotoCardInfoView *__fastcall PhotoCardInfoView::Create(char *encodedText)
+{
+    ChainElem *elem;
+    PhotoCardInfoView *cardInfo;
+
+    cardInfo = new PhotoCardInfoView();
+    if (cardInfo->Initialize(encodedText) != 0)
+    {
+        goto failure;
+    }
+
+    elem = g_Chain.CreateElem(
+        reinterpret_cast<ChainCallback>(PhotoCardInfoView::OnUpdate));
+    elem->arg = cardInfo;
+    g_Chain.AddToCalcChain(elem, 0x10);
+    cardInfo->calcChain = elem;
+
+    elem = g_Chain.CreateElem(
+        reinterpret_cast<ChainCallback>(PhotoCardInfoView::OnDraw));
+    elem->arg = cardInfo;
+    g_Chain.AddToDrawChain(elem, 0x13);
+    cardInfo->drawChain = elem;
+    return cardInfo;
+
+failure:
+    if (cardInfo != NULL)
+    {
+        delete cardInfo;
+        cardInfo = NULL;
+    }
+    return NULL;
+}
+
+// FUNCTION: TH095 0x00408990.
+void PhotoCardInfoView::Destroy()
+{
+    PhotoCardInfoView *cardInfo = this;
+    if (cardInfo != NULL)
+    {
+        delete cardInfo;
+        cardInfo = NULL;
+    }
+}
+
+// FUNCTION: TH095 0x004089F0.
+i32 PhotoCardInfoView::Update()
+{
+    switch (this->state)
+    {
+    case PHOTO_CARD_INFO_STATE_FINISHING:
+        if (this->timer > 0x28)
+        {
+            return 0;
+        }
+        break;
+    }
+
+    if (this->state != PHOTO_CARD_INFO_STATE_FINISHING &&
+        this->timer >= 0x3c)
+    {
+        if (TH095_BACKBUFFER_CLEAR_COLOR != 0)
+        {
+            this->savedScreenFadeColor = TH095_BACKBUFFER_CLEAR_COLOR;
+        }
+        TH095_BACKBUFFER_CLEAR_COLOR = 0;
+    }
+
+    i32 alpha = 0xff;
+#ifdef DIFFBUILD
+    if (((g_PhotoCardStageState->flags >> 2) & 1) != 0)
+#else
+    if (g_PhotoCardStageState->firstCaptureFrame != 0)
+#endif
+    {
+        if (g_AnmManager->GetVm(this->backgroundVmId) != NULL)
+        {
+            g_AnmManager->GetVm(this->backgroundVmId)
+                ->flagsWord &= ~2u;
+        }
+        if (g_AnmManager->GetVm(this->textVmId) != NULL)
+        {
+            g_AnmManager->GetVm(this->textVmId)
+                ->flagsWord &= ~2u;
+        }
+    }
+    else
+    {
+        if (g_AnmManager->GetVm(this->backgroundVmId) != NULL)
+        {
+            g_AnmManager->GetVm(this->backgroundVmId)
+                ->flagsWord |= 2;
+        }
+        if (g_AnmManager->GetVm(this->textVmId) != NULL)
+        {
+            g_AnmManager->GetVm(this->textVmId)
+                ->flagsWord |= 2;
+        }
+
+        if (g_PhotoCardGameRuntime->hudFade < 64.0f)
+        {
+            alpha = 0x40;
+        }
+        else if (g_PhotoCardGameRuntime->hudFade < 128.0f)
+        {
+            alpha =
+                ((u32)(g_PhotoCardGameRuntime->hudFade - 64.0f) * 0xbf >> 6) +
+                0x40;
+        }
+    }
+
+    if (g_AnmManager->GetVm(this->backgroundVmId) != NULL)
+    {
+        g_AnmManager->GetVm(this->backgroundVmId)
+            ->color1.a = alpha;
+    }
+    if (g_AnmManager->GetVm(this->textVmId) != NULL)
+    {
+        g_AnmManager->GetVm(this->textVmId)
+            ->color1.a = alpha;
+    }
+    this->timer.Tick();
+    return 1;
+}
+
+// FUNCTION: TH095 0x00408C50.
+i32 PhotoCardInfoView::Draw()
+{
+    return 1;
+}
+
+// FUNCTION: TH095 0x00408C60.
+i32 __fastcall PhotoCardInfoView::OnUpdate(PhotoCardInfoView *cardInfo)
+{
+#ifdef DIFFBUILD
+    if (((g_PhotoCardGameTask->flags >> 2) & 1) != 0)
+#else
+    if (g_PhotoCardGameTask->gameplayLoadActive != 0)
+#endif
+    {
+        return 1;
+    }
+#ifdef DIFFBUILD
+    if (((g_PhotoCardGameTask->flags >> 10) & 1) != 0)
+#else
+    if (g_PhotoCardGameTask->photoTransitionActive != 0)
+#endif
+    {
+        return 1;
+    }
+    return cardInfo->Update();
+}
+
+// FUNCTION: TH095 0x00408CB0.
+i32 __fastcall PhotoCardInfoView::OnDraw(PhotoCardInfoView *cardInfo)
+{
+#ifdef DIFFBUILD
+    if (((g_PhotoCardGameTask->flags >> 2) & 1) != 0)
+#else
+    if (g_PhotoCardGameTask->gameplayLoadActive != 0)
+#endif
+    {
+        return 1;
+    }
+    return cardInfo->Draw();
+}
+
+} // namespace th095
+
+#endif // TH095_MATCH_EXACT

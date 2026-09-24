@@ -1,0 +1,2159 @@
+#ifdef TH095_MATCH_EXACT
+#include "ResultScreenExact.inl"
+#else
+#include "ResultScreen.hpp"
+#include "AnmText.hpp"
+#include "AsciiManager.hpp"
+#include "GameplayGlobals.hpp"
+#include "InputRuntime.hpp"
+#include "Main.hpp"
+#include "ScoreData.hpp"
+#include "SceneData.hpp"
+#include "SoundPlayer.hpp"
+#include "ZunMath.hpp"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+#include "modern/ios/ios_menu_hit.hpp"
+#endif
+
+#ifdef TH095_MATCH_EXACT
+#define ZUN_SUCCESS TH095_LEGACY_ZUN_SUCCESS
+#define ZUN_ERROR TH095_LEGACY_ZUN_ERROR
+#endif
+
+namespace th095
+{
+
+static __forceinline tm *ReplayTimestampToLocalTime(i32 timestamp)
+{
+    time_t timeValue = (time_t)timestamp;
+    return localtime(&timeValue);
+}
+
+extern u16 g_ResultMenuInput;
+extern u16 g_PressedButtons;
+#define g_ResultMenuInput (RuntimeResultMenuInput())
+#define g_PressedButtons (RuntimePressedButtons())
+extern f32 g_AnmGameSpeed;
+// Target 0x004C4E38 is the zero-initialized current result-screen owner; the
+// constructor publishes it and the destructor clears it.
+DIFFABLE_STATIC(ResultScreen *, g_ResultScreen);
+
+struct ResultScreenGlobalStateView
+{
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+    // Ten native subsystem pointers precede the task timer/configuration.
+    u8 unknown000[0xfc + 10 * (sizeof(void *) - 4)];
+#else
+    u8 unknown000[0xfc];
+#endif
+    union
+    {
+        u32 flagsWord;
+        struct
+        {
+            u32 unknownFlag0 : 1;
+            u32 unknownFlag1 : 1;
+#ifdef DIFFBUILD
+            u32 suppressResultCallbacks : 1;
+#else
+            u32 gameplayLoadActive : 1;
+#endif
+            u32 unknownFlag3 : 1;
+#ifdef DIFFBUILD
+            u32 unknownFlag4 : 1;
+#else
+            u32 resultScreenActive : 1;
+#endif
+            u32 playerDeathTransitionComplete : 1;
+            u32 photoLimitTransitionComplete : 1;
+#ifdef DIFFBUILD
+            u32 unknownFlags : 25;
+#else
+            u32 resetFpsSample : 1;
+            u32 unknownFlags8_31 : 24;
+#endif
+        };
+    };
+    i32 bestShotIndex;
+    u8 unknown104[0x114 - 0x104];
+    i32 currentScore;
+    u8 unknown118[2 * sizeof(void *)];
+#ifdef DIFFBUILD
+    i32 resultMode;
+#else
+    ReplayManagerMode replayMode;
+#endif
+};
+
+#ifndef DIFFBUILD
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ResultScreenGlobalReplayModeAt120[
+    (offsetof(ResultScreenGlobalStateView, replayMode) == 0x120) ? 1 : -1];
+#endif
+#endif
+
+#ifdef DIFFBUILD
+#define TH095_RESULT_IS_RECORD_MODE() \
+    (g_ResultScreenGlobalState->resultMode == 0)
+#else
+#define TH095_RESULT_IS_RECORD_MODE() \
+    (g_ResultScreenGlobalState->replayMode == REPLAY_MANAGER_RECORD)
+#endif
+
+#ifdef DIFFBUILD
+struct ResultAnmVmDrawView
+{
+    void Draw();
+};
+#define TH095_RESULT_VM_DRAW(vm) \
+    reinterpret_cast<ResultAnmVmDrawView *>(vm)->Draw()
+#else
+#define TH095_RESULT_VM_DRAW(vm) reinterpret_cast<AnmVm *>(vm)->Draw()
+#endif
+
+struct ResultAsciiManagerView
+{
+    u8 unknown0000[0x806c];
+    u32 color;
+    f32 scaleX;
+    f32 scaleY;
+
+    void AddString(Float3 *position, const char *text);
+    void AddFormatText(Float3 *position, const char *format, ...);
+};
+
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ResultScreenGlobalBestShotIndexAt100[
+    (offsetof(ResultScreenGlobalStateView, bestShotIndex) == 0x100) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ResultScreenGlobalCurrentScoreAt114[
+    (offsetof(ResultScreenGlobalStateView, currentScore) == 0x114) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ResultAsciiColorAt806C[
+    (offsetof(ResultAsciiManagerView, color) == 0x806c) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ResultAsciiScaleXAt8070[
+    (offsetof(ResultAsciiManagerView, scaleX) == 0x8070) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ResultAsciiScaleYAt8074[
+    (offsetof(ResultAsciiManagerView, scaleY) == 0x8074) ? 1 : -1];
+#endif
+
+struct ResultAnmVmHandleView
+{
+    u8 unknown000[0x228];
+    union
+    {
+        u32 flagsWord;
+#if !defined(DIFFBUILD)
+        struct
+        {
+            u32 unknownFlags00_27 : 28;
+            u32 bypassPhotoGameSuppression : 1;
+            u32 unknownFlags29_31 : 3;
+        };
+#endif
+    };
+};
+
+extern ResultScreenGlobalStateView *g_ResultScreenGlobalState;
+
+#ifndef DIFFBUILD
+#define g_ResultScreenGlobalState \
+    TH095_RUNTIME_GLOBAL_PTR(ResultScreenGlobalStateView, g_RuntimeGlobalStateOwner)
+#endif
+
+struct ResultScreenInitializeLocals
+{
+    i32 lineIndex;
+    u8 *next;
+    char line[64];
+    long currentLevel;
+    size_t fileSize;
+};
+
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ResultScreenInitializeLocalsSizeIs50[
+    (sizeof(ResultScreenInitializeLocals) == 0x50) ? 1 : -1];
+#endif
+
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ResultBestShotImageScoreAt10[
+    (offsetof(ResultBestShotImageView, score) == 0x10) ? 1 : -1];
+#endif
+#ifdef DIFFBUILD
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ResultBestShotImageMetadataAt18[
+    (offsetof(ResultBestShotImageView, metadata) == 0x18) ? 1 : -1];
+#endif
+#else
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ResultBestShotImageScoreBreakdownAt18[
+    (offsetof(ResultBestShotImageView, scoreBreakdown) == 0x18) ? 1 : -1];
+#endif
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ResultBestShotImageCaptureTimeAt3C[
+    (offsetof(ResultBestShotImageView, captureTime) == 0x3c) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ResultBestShotImageHighScoreSlowRateAt48[
+    (offsetof(ResultBestShotImageView, highScoreSlowRate) == 0x48) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ResultBestShotImageBestShotSlowRateAt4C[
+    (offsetof(ResultBestShotImageView, bestShotSlowRate) == 0x4c) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ResultBestShotRecordCommentAt18[
+    (offsetof(ResultBestShotRecordView, comment) == 0x18) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ResultBestShotRecordValidAt68[
+    (offsetof(ResultBestShotRecordView, valid) == 0x68) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ResultBestShotRecordComponentsLoadedAt69[
+    (offsetof(ResultBestShotRecordView, componentsLoaded) == 0x69) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ResultBestShotRecordPhotoIndexAt6C[
+    (offsetof(ResultBestShotRecordView, photoIndex) == 0x6c) ? 1 : -1];
+#endif
+
+extern i32 g_ResultSceneState;
+#ifndef DIFFBUILD
+#define g_ResultSceneState (g_Supervisor.requestedSceneState)
+#endif
+#ifndef DIFFBUILD
+// Target 0x004C4E3C is a 12-entry zero-initialized BSS map.  Initialize reads
+// it once as [selected scene group * 4 + base] and no target instruction writes
+// any element: every TH095 scene group selects the same photo-result mode.
+i32 g_ResultGroupMap[12];
+#else
+extern i32 g_ResultGroupMap[];
+#endif
+extern u8 *__fastcall ReadResultHelpLine(
+    char *destination, u8 *source, i32 maxLength);
+#ifndef DIFFBUILD
+// Exact ResultScreen relocations named g_ResultSceneLimits and the canonical
+// scene-selection relocations both solve to target 0x004A5830.  Keep one
+// production owner for this twelve-entry table instead of duplicating its
+// currently identical initializer under a partial-view name.
+#define g_ResultSceneLimits g_SceneGroupCounts
+// Target pointer 0x004A441C -> canonical 96-character replay-name keyboard at
+// 0x00496398.  The final two hyphens occupy keyboard cells 94 and 95.
+const char *g_ResultAlphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ.,:;_@"
+    "abcdefghijklmnopqrstuvwxyz+-/*=%"
+    "0123456789#!?'\"$(){}[]<>&\\|~^ --";
+#else
+extern i32 g_ResultSceneLimits[];
+extern const char *g_ResultAlphabet;
+#endif
+extern ResultPhotoDataView *g_ResultPhotoData;
+extern ResultPhotoControllerView *g_ResultPhotoController;
+
+#ifndef DIFFBUILD
+#define g_ResultPhotoData \
+    TH095_RUNTIME_GLOBAL_PTR(ResultPhotoDataView, g_RuntimeStageStateOwner)
+#define g_ResultPhotoController \
+    TH095_RUNTIME_GLOBAL_PTR(ResultPhotoControllerView, g_RuntimePlayerOwner)
+#endif
+
+extern void __fastcall InitializeGameResultScreen(ResultScreen *resultScreen);
+extern void __fastcall InitializePhotoResultScreen(ResultScreen *resultScreen);
+extern void __fastcall InitializeReplayResultScreen(ResultScreen *resultScreen);
+
+#if defined(DIFFBUILD)
+#define TH095_RESULT_STATE_GAME_RESULT_MENU 1
+#define TH095_RESULT_STATE_GAME_RESULT_EXIT 2
+#define TH095_RESULT_STATE_REPLAY_RESULT_MENU 3
+#define TH095_RESULT_STATE_REPLAY_RESULT_EXIT 4
+#define TH095_RESULT_STATE_PHOTO_RESULT_MENU 5
+#define TH095_RESULT_STATE_PHOTO_RESULT_EXIT 6
+#define TH095_RESULT_STATE_GAME_RESULT_NON_RECORD_MENU 11
+#define TH095_RESULT_STATE_GAME_RESULT_NON_RECORD_EXIT 12
+#define TH095_RESULT_STATE_REPLAY_SLOT_SELECT 13
+#define TH095_RESULT_STATE_REPLAY_NAME_ENTRY 14
+#define TH095_RESULT_STATE_REPLAY_WRITE 15
+#else
+enum ResultScreenGameResultStateValue
+{
+    RESULT_SCREEN_GAME_RESULT_MENU = 1,
+    RESULT_SCREEN_GAME_RESULT_EXIT = 2,
+};
+enum ResultScreenReplayResultStateValue
+{
+    RESULT_SCREEN_REPLAY_RESULT_MENU = 3,
+    RESULT_SCREEN_REPLAY_RESULT_EXIT = 4,
+};
+enum ResultScreenPhotoResultStateValue
+{
+    RESULT_SCREEN_PHOTO_RESULT_MENU = 5,
+    RESULT_SCREEN_PHOTO_RESULT_EXIT = 6,
+};
+enum ResultScreenGameResultNonRecordStateValue
+{
+    RESULT_SCREEN_GAME_RESULT_NON_RECORD_MENU = 11,
+    RESULT_SCREEN_GAME_RESULT_NON_RECORD_EXIT = 12,
+};
+enum ResultScreenReplaySaveStateValue
+{
+    RESULT_SCREEN_REPLAY_SLOT_SELECT = 13,
+    RESULT_SCREEN_REPLAY_NAME_ENTRY = 14,
+    RESULT_SCREEN_REPLAY_WRITE = 15,
+};
+#define TH095_RESULT_STATE_GAME_RESULT_MENU RESULT_SCREEN_GAME_RESULT_MENU
+#define TH095_RESULT_STATE_GAME_RESULT_EXIT RESULT_SCREEN_GAME_RESULT_EXIT
+#define TH095_RESULT_STATE_REPLAY_RESULT_MENU RESULT_SCREEN_REPLAY_RESULT_MENU
+#define TH095_RESULT_STATE_REPLAY_RESULT_EXIT RESULT_SCREEN_REPLAY_RESULT_EXIT
+#define TH095_RESULT_STATE_PHOTO_RESULT_MENU RESULT_SCREEN_PHOTO_RESULT_MENU
+#define TH095_RESULT_STATE_PHOTO_RESULT_EXIT RESULT_SCREEN_PHOTO_RESULT_EXIT
+#define TH095_RESULT_STATE_GAME_RESULT_NON_RECORD_MENU RESULT_SCREEN_GAME_RESULT_NON_RECORD_MENU
+#define TH095_RESULT_STATE_GAME_RESULT_NON_RECORD_EXIT RESULT_SCREEN_GAME_RESULT_NON_RECORD_EXIT
+#define TH095_RESULT_STATE_REPLAY_SLOT_SELECT RESULT_SCREEN_REPLAY_SLOT_SELECT
+#define TH095_RESULT_STATE_REPLAY_NAME_ENTRY RESULT_SCREEN_REPLAY_NAME_ENTRY
+#define TH095_RESULT_STATE_REPLAY_WRITE RESULT_SCREEN_REPLAY_WRITE
+#endif
+#ifdef DIFFBUILD
+extern void __fastcall PreparePhotoResultScreen(ResultScreen *resultScreen);
+#define TH095_RESULT_PREPARE_BEST_SHOT(resultScreen) PreparePhotoResultScreen(resultScreen)
+#else
+#define TH095_RESULT_PREPARE_BEST_SHOT(resultScreen) (resultScreen)->PrepareBestShot()
+#endif
+inline u16 GetPressedButtons(u16 buttons)
+{
+    return g_PressedButtons & buttons;
+}
+
+inline u16 IsResultMenuInputPressed(u16 buttons)
+{
+    return (u16)((GetPressedButtons(buttons) != 0) ||
+                 ((g_ResultMenuInput & buttons) != 0));
+}
+
+inline ResultScreenAnmVm *GetResultVm(ResultScreen *resultScreen, i32 index)
+{
+    return &resultScreen->vms[index];
+}
+
+static __forceinline void FreeResultHelpText(ResultScreen *resultScreen)
+{
+    if (resultScreen->helpTextBuffer != NULL)
+    {
+        u8 *helpTextBuffer = resultScreen->helpTextBuffer;
+        free(helpTextBuffer);
+    }
+}
+
+// FUNCTION: TH095 0x004264B0.
+ResultScreen::ResultScreen()
+    : replayCursor(0)
+{
+    utils::DebugPrint("initialize PauseInf\n");
+    memset(this, 0, sizeof(ResultScreen));
+    g_ResultScreen = this;
+}
+
+// FUNCTION: TH095 0x00426880.
+ResultScreen::~ResultScreen()
+{
+    utils::DebugPrint("shutdown PauseInf\n");
+    g_Chain.Cut(this->calcChain);
+    g_Chain.Cut(this->drawChain);
+
+    for (i32 i = 0; i < 20; i++)
+    {
+        if (this->replays[i] != NULL)
+        {
+            delete this->replays[i];
+            this->replays[i] = NULL;
+        }
+    }
+    FreeResultHelpText(this);
+    g_AnmManager->MarkVmsForDeletion(this->anm);
+    g_ResultScreen = NULL;
+}
+
+// FUNCTION: TH095 0x00426630.
+ResultScreenResult ResultScreen::Initialize()
+{
+    u8 *cursor;
+    ResultScreenInitializeLocals locals;
+
+    this->anm = TH095_ANM_PRELOAD_COMPAT(g_AnmManager, 10, "pause.anm");
+    if (this->anm == NULL)
+    {
+        g_GameErrorContext.Log(
+            "\x89\xe6\x96\xca\x8d\x5c\x90\xac"
+            "\x83\x66\x81\x5b\x83\x5e\x82\xaa"
+            "\x8c\xa9\x82\xc2\x82\xa9\x82\xe8"
+            "\x82\xdc\x82\xb9\x82\xf1\x81\x42"
+            "\x83\x66\x81\x5b\x83\x5e\x82\xaa"
+            "\x89\xf3\x82\xea\x82\xc4\x82\xa2"
+            "\x82\xdc\x82\xb7\r\n");
+        return ZUN_ERROR;
+    }
+
+    this->helpTextBuffer =
+        FileSystem::OpenFile(
+            "sprt/help.txt", (i32 *)&locals.fileSize, FALSE);
+    if (this->helpTextBuffer == NULL)
+    {
+        g_GameErrorContext.Log(
+            "\x89\xe6\x96\xca\x8d\x5c\x90\xac"
+            "\x83\x66\x81\x5b\x83\x5e\x82\xaa"
+            "\x8c\xa9\x82\xc2\x82\xa9\x82\xe8"
+            "\x82\xdc\x82\xb9\x82\xf1\x81\x42"
+            "\x83\x66\x81\x5b\x83\x5e\x82\xaa"
+            "\x89\xf3\x82\xea\x82\xc4\x82\xa2"
+            "\x82\xdc\x82\xb7\r\n");
+        return ZUN_ERROR;
+    }
+
+    cursor = this->helpTextBuffer;
+    locals.currentLevel = -1;
+    locals.lineIndex = 0;
+    while ((i32)locals.fileSize > 0)
+    {
+        locals.next = ReadResultHelpLine(
+            locals.line, cursor, sizeof(locals.line));
+        locals.fileSize -= locals.next - cursor;
+        cursor = locals.next;
+
+        if (locals.line[0] == '#' || locals.line[0] == '\0')
+        {
+            continue;
+        }
+        if (locals.line[0] == '\0')
+        {
+            continue;
+        }
+        if (strncmp(locals.line, "end", 3) == 0)
+        {
+            break;
+        }
+        if (strncmp(locals.line, "level:", 6) == 0)
+        {
+            locals.currentLevel = atol(locals.line + 6);
+            this->sceneCounts[locals.currentLevel]++;
+            locals.lineIndex = 0;
+            continue;
+        }
+        if (locals.currentLevel >= 0)
+        {
+            strcpy(
+                reinterpret_cast<char *>(
+                    &this->sceneLabels[locals.currentLevel]
+                         [this->sceneCounts[locals.currentLevel] - 1]) +
+                    locals.lineIndex * 0x2c,
+                locals.line);
+            locals.lineIndex++;
+        }
+    }
+    this->selectedGroup = g_ResultGroupMap[g_SelectedScene->group];
+    return ZUN_SUCCESS;
+}
+
+// FUNCTION: TH095 0x00426820.
+ResultScreenResult ResultScreen::LoadAnm()
+{
+    if (TH095_ANM_PRELOAD_COMPAT(g_AnmManager, 10, "pause.anm") == NULL)
+    {
+        g_GameErrorContext.Log(
+            "\x89\xe6\x96\xca\x8d\x5c\x90\xac"
+            "\x83\x66\x81\x5b\x83\x5e\x82\xaa"
+            "\x8c\xa9\x82\xc2\x82\xa9\x82\xe8"
+            "\x82\xdc\x82\xb9\x82\xf1\x81\x42"
+            "\x83\x66\x81\x5b\x83\x5e\x82\xaa"
+            "\x89\xf3\x82\xea\x82\xc4\x82\xa2"
+            "\x82\xdc\x82\xb7\r\n");
+        return ZUN_ERROR;
+    }
+    return ZUN_SUCCESS;
+}
+
+// FUNCTION: TH095 0x00426860.
+ResultScreenResult ResultScreen::ReleaseAnm()
+{
+    g_AnmManager->ReleaseAnm(10);
+    return ZUN_SUCCESS;
+}
+
+// FUNCTION: TH095 0x00426A50.
+ResultScreen *ResultScreen::Create()
+{
+    ResultScreen *resultScreen;
+    ChainElem *elem;
+
+    resultScreen = new ResultScreen();
+    if (resultScreen->Initialize() != ZUN_SUCCESS)
+    {
+        goto failure;
+    }
+
+    elem = g_Chain.CreateElem(
+        reinterpret_cast<ChainCallback>(ResultScreen::OnUpdate));
+    elem->arg = resultScreen;
+    g_Chain.AddToCalcChain(elem, 5);
+    resultScreen->calcChain = elem;
+
+    elem = g_Chain.CreateElem(
+        reinterpret_cast<ChainCallback>(ResultScreen::OnDraw));
+    elem->arg = resultScreen;
+    g_Chain.AddToDrawChain(elem, 0x1b);
+    resultScreen->drawChain = elem;
+    return resultScreen;
+
+failure:
+    if (resultScreen != NULL)
+    {
+        delete resultScreen;
+        resultScreen = NULL;
+    }
+    return NULL;
+}
+
+// FUNCTION: TH095 0x00426B90.
+void ResultScreen::Destroy()
+{
+    ResultScreen *resultScreen = this;
+    if (resultScreen != NULL)
+    {
+        delete resultScreen;
+        resultScreen = NULL;
+    }
+}
+
+#ifdef TH095_MATCH_EXACT
+i32 ResultScreenTimer::Tick()
+#else
+i32 ZunTimer::Tick()
+#endif
+{
+    this->previous = this->current;
+    if (g_AnmGameSpeed <= 0.99f)
+    {
+        this->subFrame += g_AnmGameSpeed;
+        this->current = (i32)this->subFrame;
+    }
+    else
+    {
+        this->current++;
+        this->subFrame += 1.0f;
+    }
+    return this->current;
+}
+
+i32 ResultPhotoDataView::FindBestShot()
+{
+    i32 bestShot;
+
+    bestShot = -1;
+    {
+        i32 bestScore;
+        bestScore = -1;
+
+        for (i32 i = 0; i < 11; i++)
+        {
+            if (this->slots[i].score > bestScore)
+            {
+                bestScore = this->slots[i].score;
+                bestShot = i;
+            }
+        }
+    }
+    return bestShot;
+}
+
+void ResultSaveDataView::UpdateBestShotRecord(i32 index)
+{
+    if (this->bestShotRecords[index].rawFileData != NULL)
+    {
+        g_ZunMemory.Free(
+            this->bestShotRecords[index].rawFileData);
+    }
+    this->bestShotRecords[index].rawFileData = NULL;
+
+    if (this->bestShotRecords[index].pixelData != NULL)
+    {
+        g_ZunMemory.Free(
+            this->bestShotRecords[index].pixelData);
+    }
+    this->bestShotRecords[index].pixelData = NULL;
+    this->bestShotRecords[index].componentsLoaded = 0;
+    this->bestShotRecords[index].valid = 0;
+}
+
+static __forceinline void InitializeResultCapturePhase()
+{
+    AnmManager *anmManager = g_AnmManager;
+    if (anmManager->captureAnmIdx >= 0)
+    {
+    }
+    else
+    {
+        anmManager->captureAnmIdx = 10;
+        anmManager->captureSourceX = 0x80;
+        anmManager->captureSourceY = 0x10;
+        anmManager->captureSourceWidth = 0x180;
+        anmManager->captureSourceHeight = 0x1c0;
+        anmManager->captureDestinationX = 0;
+        anmManager->captureDestinationY = 0;
+        anmManager->captureDestinationWidth = 0x80;
+        anmManager->captureDestinationHeight = 0x80;
+#ifdef DIFFBUILD
+        anmManager->captureFlags = 0;
+#else
+        anmManager->textureCaptureEntryIndex = 0;
+#endif
+    }
+}
+
+static __forceinline void InitializeGameReplayCursorPhase(
+    ResultScreenReplayCursor *cursor)
+{
+    u8 compilerStorage[0x90];
+    cursor->Set(0);
+}
+
+void __fastcall InitializeGameResultScreen(ResultScreen *resultScreen)
+{
+    g_SoundPlayer.PlaySoundByIdx(SOUND_20, 0);
+    resultScreen->state = TH095_RESULT_STATE_GAME_RESULT_MENU;
+    resultScreen->stateTimer.Reset();
+    resultScreen->savedGameSpeed = g_AnmGameSpeed;
+    g_AnmGameSpeed = 1.0f;
+#ifdef DIFFBUILD
+    g_ResultScreenGlobalState->flagsWord |= 0x10;
+#else
+    g_ResultScreenGlobalState->resultScreenActive = 1;
+#endif
+#ifdef DIFFBUILD
+    g_ResultScreenGlobalState->flagsWord |= 0x80;
+#else
+    g_ResultScreenGlobalState->resetFpsSample = 1;
+#endif
+
+    InitializeResultCapturePhase();
+
+    resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 0), 0);
+    resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 3), 3);
+    if (TH095_RESULT_IS_RECORD_MODE())
+    {
+        resultScreen->state = TH095_RESULT_STATE_GAME_RESULT_MENU;
+        resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 4), 4);
+        resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 6), 6);
+        resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 5), 5);
+    }
+    else
+    {
+        resultScreen->state = TH095_RESULT_STATE_GAME_RESULT_NON_RECORD_MENU;
+        resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 16), 16);
+        resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 17), 17);
+        resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 18), 18);
+    }
+
+    InitializeGameReplayCursorPhase(&resultScreen->replayCursor);
+    resultScreen->replayCursor.count = 3;
+    resultScreen->replayCursor.wraps = 1;
+}
+
+
+static __forceinline void InitializeReplayNormalTailPhase()
+{
+    u8 compilerStorage[0xa0];
+    g_ReplayManager->activeInputData->timestamp =
+        (i32)time(NULL);
+    g_ReplayManager->activeInputData->score =
+        g_ResultScreenGlobalState->currentScore;
+}
+
+static __forceinline void InitializeReplayExtraTailPhase(
+    ResultScreen *resultScreen)
+{
+    u8 compilerStorage[0x58];
+    resultScreen->replayCursor.count = 2;
+    // Target 0x00428B1C/0x00428B36 read the same Supervisor::textAnm owner
+    // used by the normal replay-label path below.
+    g_Supervisor.textAnm->InitializeVm(&resultScreen->vms[21], 9);
+    g_Supervisor.textAnm->InitializeVm(&resultScreen->vms[22], 10);
+    resultScreen->vms[21].glyphWidth = 0x12;
+    resultScreen->vms[21].glyphHeight = 0x12;
+    resultScreen->vms[22].glyphWidth = 0x12;
+    resultScreen->vms[22].glyphHeight = 0x12;
+    reinterpret_cast<AnmTextManagerView *>(g_AnmManager)->DrawTextLeft(
+        reinterpret_cast<AnmTextVmView *>(&resultScreen->vms[21]),
+        0xffe0c0, 0x300000, " ");
+    reinterpret_cast<AnmTextManagerView *>(g_AnmManager)->DrawTextLeft(
+        reinterpret_cast<AnmTextVmView *>(&resultScreen->vms[22]),
+        0xffe0c0, 0x300000, " ");
+}
+
+void __fastcall InitializeReplayResultScreen(ResultScreen *resultScreen)
+{
+    resultScreen->stateTimer.Reset();
+    resultScreen->savedGameSpeed = g_AnmGameSpeed;
+    g_AnmGameSpeed = 1.0f;
+#ifdef DIFFBUILD
+    g_ResultScreenGlobalState->flagsWord |= 0x10;
+#else
+    g_ResultScreenGlobalState->resultScreenActive = 1;
+#endif
+#ifdef DIFFBUILD
+    g_ResultScreenGlobalState->flagsWord |= 0x80;
+#else
+    g_ResultScreenGlobalState->resetFpsSample = 1;
+#endif
+
+    InitializeResultCapturePhase();
+
+    resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 1), 1);
+    resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 7), 7);
+    if (TH095_RESULT_IS_RECORD_MODE())
+    {
+        resultScreen->state = TH095_RESULT_STATE_REPLAY_RESULT_MENU;
+        resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 9), 9);
+        resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 10), 10);
+        resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 8), 8);
+        resultScreen->replayCursor.Set(0);
+        resultScreen->replayCursor.count = 3;
+
+        // Exact relocations at 0x00428DC0/0x00428DD9 read target
+        // 0x004C4AAC, Supervisor::textAnm.  These two VMs render writable
+        // replay labels and are not owned by the result-screen ANM.
+        g_Supervisor.textAnm->InitializeVm(&resultScreen->vms[21], 9);
+        g_Supervisor.textAnm->InitializeVm(&resultScreen->vms[22], 10);
+        resultScreen->vms[21].glyphWidth = 0x12;
+        resultScreen->vms[21].glyphHeight = 0x12;
+        resultScreen->vms[22].glyphWidth = 0x12;
+        resultScreen->vms[22].glyphHeight = 0x12;
+
+        reinterpret_cast<AnmTextManagerView *>(g_AnmManager)->DrawTextLeft(
+            reinterpret_cast<AnmTextVmView *>(&resultScreen->vms[21]),
+            0xffe0c0, 0x300000,
+            resultScreen->sceneLabels[resultScreen->selectedGroup]
+                [g_ResultSaveData->profile.nextSceneByGroup[
+                    resultScreen->selectedGroup]].firstLine);
+        reinterpret_cast<AnmTextManagerView *>(g_AnmManager)->DrawTextLeft(
+            reinterpret_cast<AnmTextVmView *>(&resultScreen->vms[22]),
+            0xffe0c0, 0x300000,
+            resultScreen->sceneLabels[resultScreen->selectedGroup]
+                [g_ResultSaveData->profile.nextSceneByGroup[
+                    resultScreen->selectedGroup]].secondLine);
+
+        g_ResultSaveData
+            ->profile.nextSceneByGroup[resultScreen->selectedGroup]++;
+        if (g_ResultSaveData
+                ->profile.nextSceneByGroup[resultScreen->selectedGroup] >=
+            resultScreen->sceneCounts[resultScreen->selectedGroup])
+        {
+            g_ResultSaveData
+                ->profile.nextSceneByGroup[resultScreen->selectedGroup] = 0;
+        }
+
+        InitializeReplayNormalTailPhase();
+    }
+    else
+    {
+        resultScreen->state = 7;
+        resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 19), 19);
+        resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 20), 20);
+        resultScreen->replayCursor.Set(1);
+        InitializeReplayExtraTailPhase(resultScreen);
+    }
+    resultScreen->replayCursor.wraps = 1;
+}
+
+static __forceinline void InitializePhotoDisableCursorPhase(
+    ResultScreenReplayCursor *cursor)
+{
+    cursor->disabledEntries[cursor->disabledEntryCount++] = 1;
+}
+
+static __forceinline void InitializePhotoExtraCursorPhase(
+    ResultScreenReplayCursor *cursor)
+{
+    u8 compilerStorage[0x48];
+    cursor->Set(1);
+}
+
+void __fastcall InitializePhotoResultScreen(ResultScreen *resultScreen)
+{
+    resultScreen->stateTimer.Reset();
+    resultScreen->savedGameSpeed = g_AnmGameSpeed;
+    g_AnmGameSpeed = 1.0f;
+#ifdef DIFFBUILD
+    g_ResultScreenGlobalState->flagsWord |= 0x10;
+#else
+    g_ResultScreenGlobalState->resultScreenActive = 1;
+#endif
+#ifdef DIFFBUILD
+    g_ResultScreenGlobalState->flagsWord |= 0x80;
+#else
+    g_ResultScreenGlobalState->resetFpsSample = 1;
+#endif
+
+    InitializeResultCapturePhase();
+
+    resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 2), 2);
+    resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 11), 11);
+    if (TH095_RESULT_IS_RECORD_MODE())
+    {
+        resultScreen->state = TH095_RESULT_STATE_PHOTO_RESULT_MENU;
+        resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 14), 14);
+        resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 15), 15);
+        resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 12), 12);
+        resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 13), 13);
+        resultScreen->replayCursor.Set(2);
+        resultScreen->replayCursor.count = 4;
+
+        if (g_SelectedScene->scene >=
+            g_ResultSceneLimits[g_SelectedScene->group] - 1)
+        {
+            InitializePhotoDisableCursorPhase(&resultScreen->replayCursor);
+            resultScreen->vms[13].color1.color = 0x80000000;
+        }
+
+        ResultScoreEntryView *scoreEntry =
+            &g_ResultSaveData
+                 ->scoreEntries[g_ResultScreenGlobalState->bestShotIndex];
+        scoreEntry->magic = 0x4353;
+        scoreEntry->version = 1;
+        scoreEntry->size = sizeof(ResultScoreEntryView);
+        scoreEntry->index = g_ResultScreenGlobalState->bestShotIndex;
+        scoreEntry->flags |= 1;
+        if (scoreEntry->score < g_ResultScreenGlobalState->currentScore)
+        {
+            scoreEntry->score = g_ResultScreenGlobalState->currentScore;
+            scoreEntry->highScoreSlowRate =
+                100.0f -
+                (f32)(g_Supervisor.lagNumerator / g_Supervisor.lagDenominator) * 100.0f;
+        }
+    }
+    else
+    {
+        resultScreen->state = 9;
+        resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 19), 19);
+        resultScreen->anm->InitializeVm(GetResultVm(resultScreen, 20), 20);
+        InitializePhotoExtraCursorPhase(&resultScreen->replayCursor);
+        resultScreen->replayCursor.count = 2;
+    }
+    resultScreen->replayCursor.wraps = 1;
+    resultScreen->PrepareBestShot();
+    g_ReplayManager->activeInputData->timestamp =
+        (i32)time(NULL);
+    g_ReplayManager->activeInputData->score =
+        g_ResultScreenGlobalState->currentScore;
+}
+
+static __forceinline void PrepareBestShotCursorSetPhase(
+    ResultScreenReplayCursor *cursor, i32 bestShot)
+{
+    u8 compilerStorage[0x38];
+    cursor->Set(bestShot);
+}
+
+void ResultScreen::PrepareBestShot()
+{
+    i32 bestShot = g_ResultPhotoData->FindBestShot();
+    if (bestShot >= 0)
+    {
+        g_ResultPhotoData->anm->InitializeVm(
+            &this->vms[23], bestShot * 2 + 1);
+
+        ResultScreenAnmVm *vm = &this->vms[23];
+        vm->spriteSize.x = vm->loadedSprite->uvEndX * 255.0f;
+        vm->spriteSize.y = vm->loadedSprite->uvEndY * 255.0f;
+
+        g_ResultPhotoData->photoVms[bestShot].SetInterrupt(2);
+        PrepareBestShotCursorSetPhase(&this->photoCursor, bestShot);
+
+        if (bestShot < g_ResultPhotoController->GetPhotoCount())
+        {
+            this->photoCursor.count =
+                g_ResultPhotoController->GetPhotoCount();
+            this->photoCursor.wraps = 1;
+            for (i32 i = 0;
+                 i < g_ResultPhotoController->GetPhotoCount();
+                 i++)
+            {
+#ifdef DIFFBUILD
+                reinterpret_cast<ResultAnmVmHandleView *>(
+                    g_ResultPhotoData->photoVms[i].GetVm())
+                    ->flagsWord |= 0x10000000;
+#else
+                reinterpret_cast<ResultAnmVmHandleView *>(
+                    g_ResultPhotoData->photoVms[i].GetVm())
+                    ->bypassPhotoGameSuppression = 1;
+#endif
+            }
+        }
+    }
+}
+
+static __forceinline void ResultPhotoInterruptPreviousPhase(
+    ResultScreen *resultScreen)
+{
+    u8 compilerStorage[0x24];
+    g_ResultPhotoData
+        ->photoVms[resultScreen->photoCursor.GetPrevious()]
+        .SetInterrupt(3);
+}
+
+static __forceinline void ResultPhotoInterruptCurrentPhase(i32 photoIndex)
+{
+    u8 compilerStorage[8];
+    g_ResultPhotoData->photoVms[photoIndex].SetInterrupt(2);
+}
+
+void __fastcall UpdatePhotoResultScreen(ResultScreen *resultScreen)
+{
+    i32 direction;
+    ResultScreenAnmVm *vm;
+
+    direction = 0;
+    if (resultScreen->photoCursor.GetCurrent() <
+        g_ResultPhotoController->GetPhotoCount())
+    {
+        resultScreen->photoCursor.SaveCurrent();
+        if (IsResultMenuInputPressed(0x40))
+        {
+            resultScreen->photoCursor.Move(-1);
+            direction = -1;
+        }
+        if (IsResultMenuInputPressed(0x80))
+        {
+            resultScreen->photoCursor.Move(1);
+            direction = 1;
+        }
+
+        if (resultScreen->photoCursor.HasChanged())
+        {
+            i32 photoIndex = resultScreen->photoCursor.GetCurrent();
+            resultScreen->vms[24] = resultScreen->vms[23];
+            resultScreen->vms[24].SetInterrupt((direction <= 0) + 7);
+            g_ResultPhotoData->anm->InitializeVm(
+                &resultScreen->vms[23], photoIndex * 2 + 1);
+            resultScreen->vms[23].SetInterrupt((direction > 0) + 9);
+
+            vm = &resultScreen->vms[23];
+            vm->spriteSize.x = vm->loadedSprite->uvEndX * 255.0f;
+            vm->spriteSize.y = vm->loadedSprite->uvEndY * 255.0f;
+
+            ResultPhotoInterruptPreviousPhase(resultScreen);
+            ResultPhotoInterruptCurrentPhase(photoIndex);
+            g_SoundPlayer.PlaySoundByIdx(SOUND_MOVE_MENU, 0);
+        }
+    }
+
+    if (GetPressedButtons(0x400) != 0)
+    {
+        i32 photoIndex = resultScreen->photoCursor.GetCurrent();
+
+#ifdef DIFFBUILD
+        memcpy(
+            g_ResultSaveData
+                ->bestShotImages[g_ResultScreenGlobalState->bestShotIndex]
+                .metadata,
+            g_ResultPhotoData->slots[photoIndex].metadata,
+            sizeof(g_ResultSaveData->bestShotImages[0].metadata));
+#else
+        g_ResultSaveData
+            ->bestShotImages[g_ResultScreenGlobalState->bestShotIndex]
+            .scoreBreakdown =
+            g_ResultPhotoData->slots[photoIndex].scoreBreakdown;
+#endif
+        g_ResultSaveData->UpdateBestShotRecord(
+            g_ResultScreenGlobalState->bestShotIndex);
+
+        g_ResultSaveData
+            ->bestShotRecords[g_ResultScreenGlobalState->bestShotIndex]
+            .valid = 1;
+        g_ResultSaveData
+            ->bestShotRecords[g_ResultScreenGlobalState->bestShotIndex]
+            .magic = 0x53545342;
+        g_ResultSaveData
+            ->bestShotRecords[g_ResultScreenGlobalState->bestShotIndex]
+            .width = g_ResultPhotoData->slots[photoIndex].width;
+        g_ResultSaveData
+            ->bestShotRecords[g_ResultScreenGlobalState->bestShotIndex]
+            .height = g_ResultPhotoData->slots[photoIndex].height;
+        g_ResultSaveData
+            ->bestShotRecords[g_ResultScreenGlobalState->bestShotIndex]
+            .score = g_ResultPhotoData->slots[photoIndex].score;
+        g_ResultSaveData
+            ->bestShotRecords[g_ResultScreenGlobalState->bestShotIndex]
+            .group = (u16)(g_SelectedScene->group + 1);
+        g_ResultSaveData
+            ->bestShotRecords[g_ResultScreenGlobalState->bestShotIndex]
+            .scene = (u16)(g_SelectedScene->scene + 1);
+#ifdef DIFFBUILD
+        g_ResultSaveData
+            ->bestShotRecords[g_ResultScreenGlobalState->bestShotIndex]
+            .type = 2;
+#else
+        g_ResultSaveData
+            ->bestShotRecords[g_ResultScreenGlobalState->bestShotIndex]
+            .payloadFormat =
+            RESULT_BEST_SHOT_PAYLOAD_COMMENT_AND_COMPRESSED_PIXELS;
+#endif
+        g_ResultSaveData
+            ->bestShotRecords[g_ResultScreenGlobalState->bestShotIndex]
+            .version = 0x102;
+        g_ResultSaveData
+            ->bestShotRecords[g_ResultScreenGlobalState->bestShotIndex]
+            .componentCount =
+            (u8)((g_ResultPhotoData->anm->textures[photoIndex].format == 4) + 2);
+        g_ResultSaveData
+            ->bestShotImages[g_ResultScreenGlobalState->bestShotIndex]
+            .bestShotSlowRate = g_ResultPhotoData->slots[photoIndex].slowRate;
+        g_ResultSaveData
+            ->bestShotImages[g_ResultScreenGlobalState->bestShotIndex]
+            .captureTime = g_ResultPhotoData->slots[photoIndex].captureTime;
+        strcpy(
+            g_ResultSaveData
+                ->bestShotRecords[g_ResultScreenGlobalState->bestShotIndex]
+                .comment,
+            g_ResultPhotoData->slots[photoIndex].comment);
+        g_ResultSaveData
+            ->bestShotRecords[g_ResultScreenGlobalState->bestShotIndex]
+            .photoIndex = photoIndex;
+
+        g_ResultSaveData->WriteBestShotData();
+        g_SoundPlayer.PlaySoundByIdx(SOUND_TAKE_PHOTO, 0);
+        resultScreen->notificationTimer = 120;
+    }
+}
+
+i32 ResultScreenReplayCursor::Move(i32 amount)
+{
+    i32 i;
+
+tryAgain:
+    this->current += amount;
+    while (this->current >= this->count)
+    {
+        if (this->wraps != 0)
+        {
+            this->current -= this->count;
+        }
+        else
+        {
+            this->current = this->count - 1;
+        }
+    }
+    while (this->current < 0)
+    {
+        if (this->wraps != 0)
+        {
+            this->current += this->count;
+        }
+        else
+        {
+            this->current = 0;
+        }
+    }
+    for (i = 0; i < this->disabledEntryCount; i++)
+    {
+        if (this->disabledEntries[i] == this->current)
+        {
+            goto tryAgain;
+        }
+    }
+    return this->current;
+}
+
+void ResultScreenReplayCursor::Push()
+{
+    this->savedCurrent[this->saveDepth] = this->current;
+    this->savedCount[this->saveDepth] = this->count;
+    this->saveDepth++;
+    if (this->saveDepth >= 16)
+    {
+        this->saveDepth = 15;
+    }
+    this->disabledEntryCount = 0;
+}
+
+void ResultScreenReplayCursor::Pop()
+{
+    this->saveDepth--;
+    if (this->saveDepth < 0)
+    {
+        this->saveDepth = 0;
+    }
+    this->current = this->savedCurrent[this->saveDepth];
+    this->count = this->savedCount[this->saveDepth];
+    this->disabledEntryCount = 0;
+}
+
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+static int ResultMenuFirstVm(const ResultScreen *menu)
+{
+    switch(menu->state)
+    {
+    case TH095_RESULT_STATE_GAME_RESULT_MENU: return 4;
+    case TH095_RESULT_STATE_GAME_RESULT_NON_RECORD_MENU: return 16;
+    case TH095_RESULT_STATE_REPLAY_RESULT_MENU: return 8;
+    case TH095_RESULT_STATE_PHOTO_RESULT_MENU: return 12;
+    default: return -1;
+    }
+}
+#ifndef NDEBUG
+bool ResultScreenTouchPointForItem(int item, float *x, float *y)
+{
+    if (!g_ResultScreen || g_ResultScreen->stateTimer.current < 30) return false;
+    const int first = ResultMenuFirstVm(g_ResultScreen);
+    if (first < 0 || item < 0 || item >= g_ResultScreen->replayCursor.count) return false;
+    const AnmVm &vm = g_ResultScreen->vms[first+item];
+    *x=vm.position.x+vm.positionOffset.x+30;
+    *y=vm.position.y+vm.positionOffset.y+5;
+    return true;
+}
+#endif
+int ResultScreenTapMenu(float x, float y)
+{
+    ResultScreen *menu = g_ResultScreen;
+    if (!menu || menu->stateTimer.current < 10) return 0;
+    const int firstVm=ResultMenuFirstVm(menu);
+    if (firstVm < 0) return 0;
+    for (int i=0;i<menu->replayCursor.GetCount() && firstVm+i<21;++i)
+    {
+        bool disabled=false;
+        for (int j=0;j<menu->replayCursor.disabledEntryCount;++j)
+            disabled |= menu->replayCursor.disabledEntries[j] == i;
+        if (!disabled && modern::ios::HitMenuLabel(&menu->vms[firstVm+i],x,y))
+        {
+            menu->replayCursor.Set(i);
+            for (int j=0;j<menu->replayCursor.GetCount();++j)
+                menu->vms[firstVm+j].SetInterrupt((j!=i)+2);
+            return 2;
+        }
+    }
+    return 0;
+}
+#endif
+
+i32 ResultScreen::UpdateCursor(i32 firstVm)
+{
+    if (this->stateTimer < 10)
+    {
+        return 1;
+    }
+    if (this->stateTimer == 10)
+    {
+        for (i32 i = 0; i < this->replayCursor.GetCount(); i++)
+        {
+            this->vms[firstVm + i].SetInterrupt(
+                (i != this->replayCursor.GetCurrent()) + 2);
+        }
+    }
+
+    this->replayCursor.SaveCurrent();
+    if (IsResultMenuInputPressed(0x10))
+    {
+        this->replayCursor.Move(-1);
+    }
+    if (IsResultMenuInputPressed(0x20))
+    {
+        this->replayCursor.Move(1);
+    }
+
+    if (this->replayCursor.HasChanged())
+    {
+        for (i32 i = 0; i < this->replayCursor.GetCount(); i++)
+        {
+            this->vms[firstVm + i].SetInterrupt(
+                (i != this->replayCursor.GetCurrent()) + 2);
+        }
+        g_SoundPlayer.PlaySoundByIdx(SOUND_MOVE_MENU, 0);
+    }
+    return 0;
+}
+
+static __forceinline void ResultUpdatePhotoSetStatePhase(
+    ResultScreen *resultScreen, i32 value)
+{
+    u8 compilerStorage[0xb0];
+    resultScreen->state = value;
+    resultScreen->stateTimer.Reset();
+}
+
+static __forceinline void ResultUpdateReplayDisablePhase(
+    ResultScreenReplayCursor *cursor, i32 value)
+{
+    u8 compilerStorage[0xdc];
+    cursor->Disable(value);
+}
+
+static __forceinline void ResultUpdateInterruptFirstPhase(ResultScreen *resultScreen)
+{
+    for (i32 index = 0; index < 21; index++)
+    {
+        resultScreen->vms[index].SetInterrupt(1);
+    }
+}
+
+ChainCallbackResult ResultScreen::Update()
+{
+    char path[0x100];
+
+    switch (this->state)
+    {
+    case 0:
+        if (GetPressedButtons(8) != 0)
+        {
+            InitializeGameResultScreen(this);
+            break;
+        }
+        else if (g_ResultScreenGlobalState->playerDeathTransitionComplete != 0)
+        {
+            InitializeReplayResultScreen(this);
+            break;
+        }
+        else if (g_ResultScreenGlobalState->photoLimitTransitionComplete != 0)
+        {
+            InitializePhotoResultScreen(this);
+            break;
+        }
+        break;
+
+    case TH095_RESULT_STATE_GAME_RESULT_MENU:
+        if (this->UpdateCursor(4) != 0)
+        {
+            break;
+        }
+        if (GetPressedButtons(8) != 0)
+        {
+            g_SoundPlayer.PlaySoundByIdx(SOUND_BACK, 0);
+            this->state = TH095_RESULT_STATE_GAME_RESULT_EXIT;
+            this->replayCursor.Set(0);
+            this->stateTimer.Reset();
+            ResultUpdateInterruptFirstPhase(this);
+            this->vms[23].SetInterrupt(1);
+            break;
+        }
+        else if (GetPressedButtons(0x1002) != 0)
+        {
+            this->SetState(TH095_RESULT_STATE_GAME_RESULT_EXIT);
+            switch (this->replayCursor.GetCurrent())
+            {
+            case 0:
+                ResultUpdateInterruptFirstPhase(this);
+                this->vms[23].SetInterrupt(1);
+                g_SoundPlayer.PlaySoundByIdx(SOUND_BACK, 0);
+                break;
+            case 1:
+                g_SoundPlayer.PlaySoundByIdx(SOUND_SELECT, 0);
+                break;
+            case 2:
+                g_SoundPlayer.PlaySoundByIdx(SOUND_SELECT, 0);
+                break;
+            }
+        }
+        break;
+
+    case TH095_RESULT_STATE_GAME_RESULT_EXIT:
+        if (this->stateTimer >= 8)
+        {
+            g_AnmGameSpeed = this->savedGameSpeed;
+            this->state = 0;
+            switch (this->replayCursor.GetCurrent())
+            {
+            case 0:
+#ifdef DIFFBUILD
+                g_ResultScreenGlobalState->flagsWord &= ~0x10;
+#else
+                g_ResultScreenGlobalState->resultScreenActive = 0;
+#endif
+                break;
+            case 1:
+                g_AnmGameSpeed = 1.0f;
+                g_ResultSceneState = 4;
+                break;
+            case 2:
+                g_AnmGameSpeed = 1.0f;
+                g_ResultSceneState = 2;
+                break;
+            }
+            g_ResultSaveData->WriteBestShotData();
+#ifdef DIFFBUILD
+            g_ResultScreenGlobalState->flagsWord |= 0x80;
+#else
+            g_ResultScreenGlobalState->resetFpsSample = 1;
+#endif
+        }
+        break;
+
+    case TH095_RESULT_STATE_GAME_RESULT_NON_RECORD_MENU:
+        if (this->UpdateCursor(16) != 0)
+        {
+            break;
+        }
+        if (GetPressedButtons(8) != 0)
+        {
+            g_SoundPlayer.PlaySoundByIdx(SOUND_BACK, 0);
+            this->state = TH095_RESULT_STATE_GAME_RESULT_NON_RECORD_EXIT;
+            this->replayCursor.Set(0);
+            this->stateTimer.Reset();
+            ResultUpdateInterruptFirstPhase(this);
+            this->vms[23].SetInterrupt(1);
+            break;
+        }
+        else if (GetPressedButtons(0x1002) != 0)
+        {
+            this->SetState(TH095_RESULT_STATE_GAME_RESULT_NON_RECORD_EXIT);
+            switch (this->replayCursor.GetCurrent())
+            {
+            case 0:
+                g_SoundPlayer.PlaySoundByIdx(SOUND_BACK, 0);
+                ResultUpdateInterruptFirstPhase(this);
+                this->vms[23].SetInterrupt(1);
+                break;
+            case 1:
+                g_SoundPlayer.PlaySoundByIdx(SOUND_SELECT, 0);
+                break;
+            case 2:
+                g_SoundPlayer.PlaySoundByIdx(SOUND_SELECT, 0);
+                break;
+            }
+        }
+        break;
+
+    case TH095_RESULT_STATE_GAME_RESULT_NON_RECORD_EXIT:
+        if (this->stateTimer >= 8)
+        {
+            g_AnmGameSpeed = this->savedGameSpeed;
+            this->state = 0;
+            switch (this->replayCursor.GetCurrent())
+            {
+            case 0:
+#ifdef DIFFBUILD
+                g_ResultScreenGlobalState->flagsWord &= ~0x10;
+#else
+                g_ResultScreenGlobalState->resultScreenActive = 0;
+#endif
+                break;
+            case 1:
+                g_AnmGameSpeed = 1.0f;
+                g_ResultSceneState = 4;
+                break;
+            case 2:
+                g_AnmGameSpeed = 1.0f;
+                g_ResultSceneState = 2;
+                break;
+            }
+            g_ResultSaveData->WriteBestShotData();
+        }
+        break;
+
+    case TH095_RESULT_STATE_REPLAY_RESULT_MENU:
+        if (this->UpdateCursor(8) != 0)
+        {
+            break;
+        }
+        if (GetPressedButtons(0x1002) != 0)
+        {
+            this->SetState(TH095_RESULT_STATE_REPLAY_RESULT_EXIT);
+            for (i32 i = 3; i < 21; i++)
+            {
+                this->vms[i].SetInterrupt(1);
+            }
+            switch (this->replayCursor.GetCurrent())
+            {
+            case 0:
+                g_SoundPlayer.PlaySoundByIdx(SOUND_BACK, 0);
+                break;
+            case 1:
+                g_SoundPlayer.PlaySoundByIdx(SOUND_SELECT, 0);
+                break;
+            case 2:
+                g_SoundPlayer.PlaySoundByIdx(SOUND_SELECT, 0);
+                break;
+            }
+        }
+        break;
+
+    case TH095_RESULT_STATE_REPLAY_RESULT_EXIT:
+        if (this->stateTimer >= 8)
+        {
+            g_AnmGameSpeed = 1.0f;
+            this->state = 0;
+            switch (this->replayCursor.GetCurrent())
+            {
+            case 0:
+                g_ResultSceneState = 4;
+                break;
+            case 2:
+                this->replayCursor.Push();
+                this->replayCursor.count = 20;
+                this->state = TH095_RESULT_STATE_REPLAY_SLOT_SELECT;
+                this->LoadReplays();
+                this->stateTimer.Reset();
+                break;
+            case 1:
+                g_ResultSceneState = 2;
+                break;
+            }
+            g_ResultSaveData->WriteBestShotData();
+#ifdef DIFFBUILD
+            g_ResultScreenGlobalState->flagsWord |= 0x80;
+#else
+            g_ResultScreenGlobalState->resetFpsSample = 1;
+#endif
+        }
+        break;
+
+    case TH095_RESULT_STATE_PHOTO_RESULT_MENU:
+        if (this->UpdateCursor(12) != 0)
+        {
+            break;
+        }
+        else
+        {
+            UpdatePhotoResultScreen(this);
+            if (GetPressedButtons(0x1002) != 0)
+            {
+                this->SetState(TH095_RESULT_STATE_PHOTO_RESULT_EXIT);
+                for (i32 i = 3; i < 21; i++)
+                {
+                    this->vms[i].SetInterrupt(1);
+                }
+                this->vms[23].SetInterrupt(1);
+                switch (this->replayCursor.GetCurrent())
+                {
+                default:
+                    g_SoundPlayer.PlaySoundByIdx(SOUND_SELECT, 0);
+                    break;
+                }
+            }
+        }
+        break;
+
+    case TH095_RESULT_STATE_PHOTO_RESULT_EXIT:
+        if (this->stateTimer >= 8)
+        {
+            g_AnmGameSpeed = 1.0f;
+            this->state = 0;
+            g_ResultSaveData->WriteBestShotData();
+            switch (this->replayCursor.GetCurrent())
+            {
+            case 3:
+                this->replayCursor.Push();
+                this->replayCursor.count = 20;
+                this->state = TH095_RESULT_STATE_REPLAY_SLOT_SELECT;
+                this->LoadReplays();
+                this->stateTimer.Reset();
+                break;
+            case 2:
+                g_ResultSceneState = 2;
+                break;
+            case 0:
+                g_ResultSceneState = 4;
+                break;
+            case 1:
+                g_ResultSaveData->scene = (i16)(g_SelectedScene->scene + 1);
+                g_SelectedScene =
+                    g_SceneGroups[g_SelectedScene->group] +
+                    (g_SelectedScene->scene + 1);
+                g_ResultSceneState = 8;
+                break;
+            }
+#ifdef DIFFBUILD
+            g_ResultScreenGlobalState->flagsWord |= 0x80;
+#else
+            g_ResultScreenGlobalState->resetFpsSample = 1;
+#endif
+        }
+        break;
+
+    case 7:
+    case 9:
+        if (this->UpdateCursor(19) != 0)
+        {
+            break;
+        }
+        if (GetPressedButtons(0x1002) != 0)
+        {
+            this->SetState(8);
+            switch (this->replayCursor.GetCurrent())
+            {
+            case 0:
+                g_SoundPlayer.PlaySoundByIdx(SOUND_SELECT, 0);
+                break;
+            case 1:
+                g_SoundPlayer.PlaySoundByIdx(SOUND_SELECT, 0);
+                break;
+            }
+        }
+        break;
+
+    case 8:
+    case 10:
+        if (this->stateTimer >= 8)
+        {
+            g_AnmGameSpeed = 1.0f;
+            this->state = 0;
+            switch (this->replayCursor.GetCurrent())
+            {
+            case 0:
+                g_ResultSceneState = 4;
+                break;
+            case 1:
+                g_ResultSceneState = 2;
+                break;
+            }
+#ifdef DIFFBUILD
+            g_ResultScreenGlobalState->flagsWord |= 0x80;
+#else
+            g_ResultScreenGlobalState->resetFpsSample = 1;
+#endif
+        }
+        break;
+
+    case TH095_RESULT_STATE_REPLAY_SLOT_SELECT:
+        this->replayCursor.SaveCurrent();
+        if (IsResultMenuInputPressed(0x10))
+        {
+            this->replayCursor.Move(-1);
+        }
+        if (IsResultMenuInputPressed(0x20))
+        {
+            this->replayCursor.Move(1);
+        }
+        if (this->replayCursor.HasChanged())
+        {
+            g_SoundPlayer.PlaySoundByIdx(SOUND_MOVE_MENU, 0);
+        }
+
+        if (GetPressedButtons(0x1002) != 0)
+        {
+            g_SoundPlayer.PlaySoundByIdx(SOUND_SELECT, 0);
+            this->SetState(TH095_RESULT_STATE_REPLAY_NAME_ENTRY);
+            strcpy(this->replayName, g_ResultSaveData->replayName);
+            if (strcmp(this->replayName, "        ") != 0)
+            {
+                this->keyboardSelection = 95;
+            }
+            this->replayCursor.Push();
+            goto updateResultVms;
+        }
+        else if (GetPressedButtons(9) != 0)
+        {
+            g_SoundPlayer.PlaySoundByIdx(SOUND_BACK, 0);
+            if (g_ResultScreenGlobalState->playerDeathTransitionComplete != 0)
+            {
+                this->stateTimer.Reset();
+                this->anm->InitializeVm(GetResultVm(this, 7), 7);
+                this->state = TH095_RESULT_STATE_REPLAY_RESULT_MENU;
+                this->anm->InitializeVm(GetResultVm(this, 9), 9);
+                this->anm->InitializeVm(GetResultVm(this, 10), 10);
+                this->anm->InitializeVm(GetResultVm(this, 8), 8);
+                this->replayCursor.Pop();
+                this->replayCursor.count = 3;
+                this->replayCursor.wraps = 1;
+                this->replayNameCursor = 0;
+                goto updateResultVms;
+            }
+            else if (g_ResultScreenGlobalState->photoLimitTransitionComplete != 0)
+            {
+                ResultUpdatePhotoSetStatePhase(
+                    this, TH095_RESULT_STATE_PHOTO_RESULT_MENU);
+                this->anm->InitializeVm(GetResultVm(this, 11), 11);
+                this->state = TH095_RESULT_STATE_PHOTO_RESULT_MENU;
+                this->anm->InitializeVm(GetResultVm(this, 14), 14);
+                this->anm->InitializeVm(GetResultVm(this, 15), 15);
+                this->anm->InitializeVm(GetResultVm(this, 12), 12);
+                this->anm->InitializeVm(GetResultVm(this, 13), 13);
+                this->replayCursor.Pop();
+                if (g_SelectedScene->scene >=
+                    g_ResultSceneLimits[g_SelectedScene->group] - 1)
+                {
+                    ResultUpdateReplayDisablePhase(&this->replayCursor, 1);
+                    this->vms[13].color1.color = 0x80000000;
+                }
+                TH095_RESULT_PREPARE_BEST_SHOT(this);
+                this->replayCursor.count = 4;
+                this->replayCursor.wraps = 1;
+                break;
+            }
+        }
+        break;
+
+    case TH095_RESULT_STATE_REPLAY_NAME_ENTRY:
+        if (IsResultMenuInputPressed(0x10))
+        {
+            this->keyboardSelection -= 16;
+            if (this->keyboardSelection < 0)
+            {
+                this->keyboardSelection += 96;
+            }
+        }
+        if (IsResultMenuInputPressed(0x20))
+        {
+            this->keyboardSelection += 16;
+            if (this->keyboardSelection >= 96)
+            {
+                this->keyboardSelection -= 96;
+            }
+        }
+        if (IsResultMenuInputPressed(0x40))
+        {
+            if (this->keyboardSelection % 16 == 0)
+            {
+                this->keyboardSelection += 15;
+            }
+            else
+            {
+                this->keyboardSelection--;
+            }
+        }
+        if (IsResultMenuInputPressed(0x80))
+        {
+            this->keyboardSelection++;
+            if (this->keyboardSelection % 16 == 0)
+            {
+                this->keyboardSelection -= 16;
+            }
+        }
+
+        if (GetPressedButtons(0x1002) != 0)
+        {
+            if (this->keyboardSelection == 95)
+            {
+                g_SoundPlayer.PlaySoundByIdx(SOUND_SELECT, 0);
+                this->SetState(TH095_RESULT_STATE_REPLAY_WRITE);
+            }
+            else if (this->keyboardSelection == 94)
+            {
+                g_SoundPlayer.PlaySoundByIdx(SOUND_BACK, 0);
+                if (this->replayNameCursor == 7 && this->replayName[7] != ' ')
+                {
+                    this->replayName[7] = ' ';
+                }
+                else
+                {
+                    this->replayNameCursor--;
+                    if (this->replayNameCursor < 0)
+                    {
+                        this->replayNameCursor = 0;
+                    }
+                    this->replayName[this->replayNameCursor] = ' ';
+                }
+            }
+            else
+            {
+                g_SoundPlayer.PlaySoundByIdx(SOUND_SELECT, 0);
+                this->replayName[this->replayNameCursor] =
+                    g_ResultAlphabet[this->keyboardSelection];
+                this->replayNameCursor++;
+                if (this->replayNameCursor >= 8)
+                {
+                    this->replayNameCursor = 7;
+                    this->keyboardSelection = 95;
+                }
+            }
+        }
+
+        if (GetPressedButtons(9) != 0)
+        {
+            g_SoundPlayer.PlaySoundByIdx(SOUND_BACK, 0);
+            if (this->replayNameCursor > 0)
+            {
+                this->replayNameCursor--;
+                this->replayName[this->replayNameCursor] = ' ';
+            }
+            else
+            {
+                this->SetState(TH095_RESULT_STATE_REPLAY_SLOT_SELECT);
+                this->replayCursor.Pop();
+            }
+        }
+        break;
+
+    case TH095_RESULT_STATE_REPLAY_WRITE:
+        sprintf(path, "th95_%.2d.rpy", this->replayCursor.GetCurrent() + 1);
+        g_ReplayManager->WriteReplay(path, this->replayName);
+        strcpy(g_ResultSaveData->replayName, this->replayName);
+        this->SetState(TH095_RESULT_STATE_REPLAY_SLOT_SELECT);
+        this->LoadReplays();
+        this->replayCursor.Pop();
+        break;
+    }
+
+updateResultVms:
+    for (i32 i = 0; i < 21; i++)
+    {
+        AnmManager::ExecuteScript(
+            reinterpret_cast<AnmVm *>(&this->vms[i]));
+    }
+    this->stateTimer.Tick();
+    AnmManager::ExecuteScript(
+        reinterpret_cast<AnmVm *>(&this->auxiliaryVms[0]));
+    AnmManager::ExecuteScript(
+        reinterpret_cast<AnmVm *>(&this->auxiliaryVms[1]));
+    AnmManager::ExecuteScript(reinterpret_cast<AnmVm *>(&this->photoVm));
+    AnmManager::ExecuteScript(
+        reinterpret_cast<AnmVm *>(&this->photoTransitionVm));
+    return CHAIN_CALLBACK_RESULT_CONTINUE;
+}
+
+static __forceinline void DrawResultTotalScorePhase(Float3 *position)
+{
+    i32 totalScore = 0;
+    for (u32 scoreIndex = 0; scoreIndex < 120; scoreIndex++)
+    {
+        totalScore += g_ResultSaveData->bestShotImages[scoreIndex].score;
+    }
+    position->x = 230.0f;
+    position->y = 68.0f;
+    position->z = 0.0f;
+    g_AsciiManager.AddFormatText(position, "Total Score %.8d", totalScore);
+}
+
+static __forceinline i32 ResultFindBestShotPhase()
+{
+    // TH095 Draw assigns a 12-byte compiler allocation phase to this
+    // best-shot frontend. 0/4/8/16-byte controls and moving the same 12
+    // bytes to the total-score or ordinary-shot phases do not replay exact.
+    u8 compilerStorage[12];
+    return g_ResultPhotoData->FindBestShot();
+}
+
+static __forceinline void DrawResultBestShotLinePhase(
+    ResultScreen *resultScreen, Float3 *position)
+{
+    i32 photoIndex = resultScreen->photoCursor.GetCurrent();
+    position->x = 230.0f;
+    position->y = 290.0f;
+    position->z = 0.0f;
+    g_AsciiManager.AddFormatText(
+        position, "  Best Shot   %.6d",
+        g_ResultPhotoData->slots[photoIndex].score);
+}
+
+static __forceinline void DrawResultShotLinePhase(
+    ResultScreen *resultScreen, Float3 *position)
+{
+    i32 photoIndex = resultScreen->photoCursor.GetCurrent();
+    position->x = 230.0f;
+    position->y = 290.0f;
+    position->z = 0.0f;
+    g_AsciiManager.AddFormatText(
+        position, "       Shot   %.6d",
+        g_ResultPhotoData->slots[photoIndex].score);
+}
+
+// TH08's patched #pragma var_order is used only as a local-order oracle here.
+// Stock VC7.1 ignores that pragma, so these target-proven identifier buckets
+// reproduce the same physical order for the 28 real Draw locals. Keep the
+// semantic aliases readable and change the backing rank only with a full replay.
+#define i resultDrawBacking157
+#define replayListSceneText resultDrawBacking153
+#define replayListLevelText resultDrawBacking146
+#define replayListPosition resultDrawBacking142
+#define replayListIndex resultDrawBacking096
+#define replayListTimestamp resultDrawBacking092
+#define replayIndex resultDrawBacking026
+#define replayNameSceneText resultDrawBacking022
+#define replayNameLevelText resultDrawBacking139
+#define replayNamePosition resultDrawBacking135
+#define replayNameTimestamp resultDrawBacking131
+#define characterPosition resultDrawBacking119
+#define offsetY resultDrawBacking115
+#define offsetX resultDrawBacking111
+#define characterText resultDrawBacking089
+#define keyboardColumn resultDrawBacking085
+#define positionZ resultDrawBacking081
+#define rowY resultDrawBacking017
+#define characterX resultDrawBacking013
+#define bestShotPosition resultDrawBacking127
+#define shotPosition resultDrawBacking123
+#define scorePosition resultDrawBacking107
+#define highScorePosition resultDrawBacking103
+#define totalScorePosition resultDrawBacking077
+#define slowRatePosition resultDrawBacking073
+#define notificationPosition resultDrawBacking066
+#define replayListTitlePosition resultDrawBacking062
+#define replayNameTitlePosition resultDrawBacking057
+ChainCallbackResult ResultScreen::Draw()
+{
+    Float3 replayNameTitlePosition;
+    Float3 replayListTitlePosition;
+    Float3 notificationPosition;
+    Float3 slowRatePosition;
+    Float3 totalScorePosition;
+    Float3 highScorePosition;
+    Float3 scorePosition;
+    Float3 shotPosition;
+    Float3 bestShotPosition;
+    f32 characterX;
+    f32 rowY;
+    f32 positionZ;
+    i32 keyboardColumn;
+    char characterText[16];
+    f32 offsetX;
+    f32 offsetY;
+    Float3 characterPosition;
+    tm *replayNameTimestamp;
+    Float3 replayNamePosition;
+    char replayNameLevelText[8];
+    char replayNameSceneText[8];
+    i32 replayIndex;
+    tm *replayListTimestamp;
+    i32 replayListIndex;
+    Float3 replayListPosition;
+    char replayListLevelText[8];
+    char replayListSceneText[8];
+    i32 i;
+
+    for (i = 0; i < 21; i++)
+    {
+        TH095_RESULT_VM_DRAW(&this->vms[i]);
+    }
+    TH095_RESULT_VM_DRAW(&this->vms[23]);
+    TH095_RESULT_VM_DRAW(&this->vms[24]);
+
+    switch (this->state)
+    {
+    case TH095_RESULT_STATE_REPLAY_RESULT_MENU:
+        TH095_RESULT_VM_DRAW(&this->vms[21]);
+        TH095_RESULT_VM_DRAW(&this->vms[22]);
+        break;
+
+    case TH095_RESULT_STATE_PHOTO_RESULT_MENU:
+    {
+        if (this->stateTimer.GetCurrent() < 30)
+        {
+            g_AsciiManager.color.color =
+                (((this->stateTimer.GetCurrent() * 255) / 32) << 24) |
+                0x00ffffff;
+        }
+
+        if (this->photoCursor.GetCurrent() == ResultFindBestShotPhase())
+        {
+            DrawResultBestShotLinePhase(this, &bestShotPosition);
+        }
+        else
+        {
+            DrawResultShotLinePhase(this, &shotPosition);
+        }
+
+        scorePosition.x = 230.0f;
+        scorePosition.y = 40.0f;
+        scorePosition.z = 0.0f;
+        g_AsciiManager.AddFormatText(
+            &scorePosition, "      Score  %.7d",
+            g_ResultScreenGlobalState->currentScore);
+
+        highScorePosition.x = 230.0f;
+        highScorePosition.y = 54.0f;
+        highScorePosition.z = 0.0f;
+        g_AsciiManager.AddFormatText(
+            &highScorePosition, " High Score  %.7d",
+            g_ResultSaveData
+                ->bestShotImages[g_ResultScreenGlobalState->bestShotIndex]
+                .score);
+
+        DrawResultTotalScorePhase(&totalScorePosition);
+
+        if (this->stateTimer.GetCurrent() < 30)
+        {
+            g_AsciiManager.color.color =
+                (((this->stateTimer.GetCurrent() * 255) / 32) << 24) |
+                0x00d0d0e0;
+        }
+        else
+        {
+            g_AsciiManager.color.color = 0xffd0d0e0;
+        }
+        slowRatePosition.x = 230.0f;
+        slowRatePosition.y = 82.0f;
+        slowRatePosition.z = 0.0f;
+        g_AsciiManager.AddFormatText(
+            &slowRatePosition, "  Slow Rate      %2.0f%%",
+            g_ResultSaveData
+                ->bestShotImages[g_ResultScreenGlobalState->bestShotIndex]
+                .highScoreSlowRate);
+        g_AsciiManager.color.color = 0xffffffff;
+
+        if (this->notificationTimer > 0)
+        {
+            g_AsciiManager.color.color = 0xffffff00;
+            notificationPosition.x = 212.0f;
+            notificationPosition.y = 224.0f;
+            notificationPosition.z = 0.0f;
+            g_AsciiManager.AddFormatText(
+                &notificationPosition, "BestShot was overwrited!");
+            g_AsciiManager.color.color = 0xffffffff;
+            this->notificationTimer--;
+        }
+        break;
+    }
+
+    case TH095_RESULT_STATE_REPLAY_SLOT_SELECT:
+    {
+        replayListTitlePosition.x = 160.0f;
+        replayListTitlePosition.y = 32.0f;
+        replayListTitlePosition.z = 0.0f;
+        g_AsciiManager.AddFormatText(
+            &replayListTitlePosition, "Select Replay Number");
+
+        replayListPosition.x = 144.0f;
+        replayListPosition.y = 64.0f;
+        replayListPosition.z = 0.0f;
+        for (replayListIndex = 0; replayListIndex < 20; replayListIndex++)
+        {
+            if (this->replayCursor.GetCurrent() == replayListIndex)
+            {
+                g_AsciiManager.color.color = 0xffffffff;
+            }
+            else
+            {
+                g_AsciiManager.color.color = 0xff404040;
+            }
+
+            if (this->replays[replayListIndex] == NULL ||
+                this->replays[replayListIndex]->activeInputData == NULL)
+            {
+                g_AsciiManager.AddFormatText(
+                    &replayListPosition, "No.%.2d %s %s-%s %s ------",
+                    replayListIndex + 1, "--------", "--", "-", "--/-- --:--");
+            }
+            else
+            {
+                replayListTimestamp = ReplayTimestampToLocalTime(
+                    this->replays[replayListIndex]
+                        ->activeInputData->timestamp);
+
+                if (this->replays[replayListIndex]->activeInputData->level == 10)
+                {
+                    strcpy(replayListLevelText, "EX");
+                }
+                else
+                {
+                    sprintf(replayListLevelText, "%2d",
+                            this->replays[replayListIndex]
+                                    ->activeInputData->level +
+                                1);
+                }
+                sprintf(replayListSceneText, "%d",
+                        this->replays[replayListIndex]->activeInputData->scene + 1);
+                g_AsciiManager.AddFormatText(
+                    &replayListPosition,
+                    "No.%.2d %s %s-%s %.2d/%.2d %.2d:%.2d %6d",
+                    replayListIndex + 1,
+                    this->replays[replayListIndex]->activeInputData->replayName,
+                    replayListLevelText, replayListSceneText,
+                    replayListTimestamp->tm_mon + 1,
+                    replayListTimestamp->tm_mday, replayListTimestamp->tm_hour,
+                    replayListTimestamp->tm_min,
+                    this->replays[replayListIndex]->activeInputData->score);
+            }
+            replayListPosition.y += 18.0f;
+        }
+        g_AsciiManager.color.color = 0xffffffff;
+        break;
+    }
+
+    case TH095_RESULT_STATE_REPLAY_NAME_ENTRY:
+    {
+        replayNameTitlePosition.x = 160.0f;
+        replayNameTitlePosition.y = 32.0f;
+        replayNameTitlePosition.z = 0.0f;
+        g_AsciiManager.AddFormatText(
+            &replayNameTitlePosition, "Replay Name Regist");
+
+        replayNamePosition.x = 144.0f;
+        replayNamePosition.y = 128.0f;
+        replayNamePosition.z = 0.0f;
+        g_AsciiManager.color.color = 0xa0ffffc0;
+        replayNamePosition.x =
+            (f32)(this->replayNameCursor * 9) + 198.0f;
+        g_AsciiManager.AddFormatText(&replayNamePosition, "_");
+
+        replayNamePosition.x = 144.0f;
+        g_AsciiManager.color.color = 0xffffffff;
+        replayIndex = this->replayCursor.current;
+        replayNameTimestamp = ReplayTimestampToLocalTime(
+            g_ReplayManager->activeInputData->timestamp);
+        if (g_SelectedScene->group == 10)
+        {
+            strcpy(replayNameLevelText, "EX");
+        }
+        else
+        {
+            sprintf(replayNameLevelText, " %d",
+                    g_SelectedScene->group + 1);
+        }
+        sprintf(replayNameSceneText, "%d", g_SelectedScene->scene + 1);
+        g_AsciiManager.AddFormatText(
+            &replayNamePosition,
+            "No.%.2d %s %s-%s %.2d/%.2d %.2d:%.2d %6d",
+            replayIndex + 1, this->replayName, replayNameLevelText,
+            replayNameSceneText, replayNameTimestamp->tm_mon + 1,
+            replayNameTimestamp->tm_mday, replayNameTimestamp->tm_hour,
+            replayNameTimestamp->tm_min,
+            g_ResultScreenGlobalState->currentScore);
+
+        rowY = 320.0f;
+        positionZ = 0.0f;
+        for (i = 0; i < 6; i++)
+        {
+            characterX = 208.0f;
+            for (keyboardColumn = 0; keyboardColumn < 16; keyboardColumn++)
+            {
+                characterX += 12.0f;
+                offsetY = 0.0f;
+                offsetX = 0.0f;
+                if (this->keyboardSelection == i * 16 + keyboardColumn)
+                {
+                    g_AsciiManager.color.color = 0xffffffc0;
+                    if (this->stateTimer.current % 32 < 16)
+                    {
+                        offsetY = (this->stateTimer.current % 16) *
+                                      0.8f / 16.0f +
+                                  1.2f;
+                    }
+                    else
+                    {
+                        offsetY = 2.0f -
+                                  (this->stateTimer.current % 16) *
+                                      0.8f / 16.0f;
+                    }
+                    g_AsciiManager.scaleX = offsetY;
+                    g_AsciiManager.scaleY = offsetY;
+                    offsetY = -(offsetY - 1.0f) * 4.0f;
+                    offsetX = offsetY;
+                }
+                else
+                {
+                    g_AsciiManager.color.color = 0xc0c0c0c0;
+                    g_AsciiManager.scaleX = 1.0f;
+                    g_AsciiManager.scaleY = 1.0f;
+                }
+
+                characterPosition.x = characterX + offsetY;
+                characterPosition.y = rowY + offsetX;
+                characterPosition.z = positionZ;
+
+                characterText[0] =
+                    g_ResultAlphabet[i * 16 + keyboardColumn];
+                characterText[1] = '\0';
+                if (i == 5)
+                {
+                    if (keyboardColumn == 14)
+                    {
+                        characterText[0] = 0x7f;
+                    }
+                    else if (keyboardColumn == 15)
+                    {
+                        characterText[0] = (char)0x80;
+                    }
+                    else if (keyboardColumn == 13)
+                    {
+                        characterText[0] = (char)0x81;
+                    }
+                }
+                g_AsciiManager.AddString(
+                    &characterPosition, characterText);
+            }
+            rowY += 16.0f;
+        }
+        g_AsciiManager.scaleX = 1.0f;
+        g_AsciiManager.scaleY = 1.0f;
+        break;
+    }
+    }
+    return CHAIN_CALLBACK_RESULT_CONTINUE;
+}
+#undef replayNameTitlePosition
+#undef replayListTitlePosition
+#undef notificationPosition
+#undef slowRatePosition
+#undef totalScorePosition
+#undef highScorePosition
+#undef scorePosition
+#undef shotPosition
+#undef bestShotPosition
+#undef characterX
+#undef rowY
+#undef positionZ
+#undef keyboardColumn
+#undef characterText
+#undef offsetX
+#undef offsetY
+#undef characterPosition
+#undef replayNameTimestamp
+#undef replayNamePosition
+#undef replayNameLevelText
+#undef replayNameSceneText
+#undef replayIndex
+#undef replayListTimestamp
+#undef replayListIndex
+#undef replayListPosition
+#undef replayListLevelText
+#undef replayListSceneText
+#undef i
+
+
+ChainCallbackResult ResultScreen::OnUpdate(ResultScreen *resultScreen)
+{
+#ifdef DIFFBUILD
+    if (g_ResultScreenGlobalState->suppressResultCallbacks)
+#else
+    if (g_ResultScreenGlobalState->gameplayLoadActive)
+#endif
+    {
+        return CHAIN_CALLBACK_RESULT_CONTINUE;
+    }
+    return resultScreen->Update();
+}
+
+ChainCallbackResult ResultScreen::OnDraw(ResultScreen *resultScreen)
+{
+#ifdef DIFFBUILD
+    if (g_ResultScreenGlobalState->suppressResultCallbacks)
+#else
+    if (g_ResultScreenGlobalState->gameplayLoadActive)
+#endif
+    {
+        return CHAIN_CALLBACK_RESULT_CONTINUE;
+    }
+    return resultScreen->Draw();
+}
+
+ResultScreenResult ResultScreen::LoadReplays()
+{
+    char path[0x100];
+
+    for (i32 i = 0; i < 20; i++)
+    {
+        if (this->replays[i] != NULL)
+        {
+            delete this->replays[i];
+            this->replays[i] = NULL;
+        }
+        sprintf(path, "th95_%.2d.rpy", i + 1);
+        this->replays[i] = ReplayManager::Load(path);
+    }
+    this->replayCursor.Set(0);
+    return ZUN_SUCCESS;
+}
+
+#undef TH095_RESULT_IS_RECORD_MODE
+
+} // namespace th095
+
+#endif // TH095_MATCH_EXACT

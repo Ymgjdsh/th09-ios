@@ -1,0 +1,1116 @@
+#ifdef TH095_MATCH_EXACT
+#include "AnmManager.hpp"
+#endif
+#include "SceneSelect.hpp"
+#include "ReplayBrowser.hpp"
+#include "OptionsMenu.hpp"
+#include "MusicRoom.hpp"
+#include "HelpMenu.hpp"
+#include "SoundPlayer.hpp"
+#include "ZunMath.hpp"
+#include "GameplayGlobals.hpp"
+#ifndef DIFFBUILD
+#include "InputRuntime.hpp"
+#endif
+#if !defined(DIFFBUILD) && !defined(TH095_MATCH_EXACT)
+#include "FileSystem.hpp"
+#include "PhotoGameTask.hpp"
+#endif
+
+#include <d3d8.h>
+#include <stdio.h>
+#include <stdlib.h>
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+#include "modern/ios/ios_menu_hit.hpp"
+#endif
+#ifdef TH095_IOS
+namespace th095 { namespace modern { void LogStartup(const char *); } }
+#endif
+
+namespace th095
+{
+
+#if defined(DIFFBUILD) || defined(TH095_MATCH_EXACT)
+#define TH095_MAIN_MENU_STATE_INITIALIZE 0
+#define TH095_MAIN_MENU_STATE_ACTIVE 1
+#define TH095_SCENE_SELECT_STATE_INITIALIZE 0
+#else
+enum FrontEndMainMenuStateValue
+{
+    FRONT_END_MAIN_MENU_STATE_INITIALIZE = 0,
+    FRONT_END_MAIN_MENU_STATE_ACTIVE = 1,
+};
+#define TH095_MAIN_MENU_STATE_INITIALIZE FRONT_END_MAIN_MENU_STATE_INITIALIZE
+#define TH095_MAIN_MENU_STATE_ACTIVE FRONT_END_MAIN_MENU_STATE_ACTIVE
+#define TH095_SCENE_SELECT_STATE_INITIALIZE SCENE_SELECT_STATE_INITIALIZE
+#endif
+
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+typedef AnmTextureEntryView FrontEndTextureEntryView;
+typedef AnmLoaded FrontEndAnmStorageView;
+#else
+struct FrontEndTextureEntryView
+{
+    IDirect3DTexture8 *texture;
+    u8 unknown004[8];
+    i32 bytesPerPixel;
+};
+
+struct FrontEndAnmStorageView
+{
+    u8 unknown000[0x14];
+    FrontEndTextureEntryView *textures;
+};
+#endif
+
+struct FrontEndVmUpdateView
+{
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+    u8 unknown000[offsetof(AnmVm, position)];
+#else
+    u8 unknown000[0x148];
+#endif
+    Float3 position;
+    u8 unknown154[0xcc];
+    u32 displayState;
+};
+
+struct FrontEndGameManagerView
+{
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+    // Ten native subsystem pointers precede the task timer/configuration.
+    u8 unknown000[0xfc + 10 * (sizeof(void *) - 4)];
+#else
+    u8 unknown000[0xfc];
+#endif
+    union
+    {
+        u32 flags;
+        struct
+        {
+            u32 unknownFlags0 : 3;
+            u32 transitionBlocked : 1;
+            u32 unknownFlags4 : 28;
+        };
+    };
+};
+
+typedef ZunTimer FrontEndControllerTimer;
+
+#ifdef TH095_MATCH_EXACT
+#define CreateVmAtScreen CreateVm
+#endif
+
+struct FrontEndControllerUpdateView
+{
+    SceneAnmLoadedView *sceneAnm;
+    SceneAnmLoadedView *transitionAnm;
+    FrontEndControllerTimer stateTimer;
+    FrontEndControllerTimer animationTimer;
+    ResultScreenReplayCursor cursor;
+#ifdef TH095_MATCH_EXACT
+    u8 unknown00f8[0xafc];
+#else
+    ResultScreenReplayCursor replayColumnCursor;
+    u8 unknown01d0[0xa24];
+#endif
+    SceneAnmVmIdArray vmIds;
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+    u8 unknown0e88[0x5278 + kFrontEndTextGrowth + kFrontEndReplayGrowth];
+#else
+    u8 unknown0e88[0x5278];
+#endif
+    AnmVmId transitionVm;
+    u8 unknown6104[4];
+    i32 transitionReady;
+    i32 state;
+#if defined(DIFFBUILD) || defined(TH095_MATCH_EXACT)
+    i32 requestedState;
+#else
+    FrontEndRequestedState requestedState;
+#endif
+    u8 unknown6114[0x0c];
+    union
+    {
+        u32 flags;
+#if defined(TH095_MATCH_EXACT)
+        struct
+        {
+            u32 titleLoadIncomplete : 1;
+            u32 titleLoadFailed : 1;
+            u32 unknownFlags2 : 30;
+        };
+#else
+        FrontEndControllerFlagBits flagBits;
+#endif
+    };
+    i32 entryMode;
+};
+
+#if !defined(TH095_MATCH_EXACT)
+struct FrontEndPostQueueStateView
+{
+    SceneStateHistoryView stateHistory;
+    u8 unknown10[0x0c];
+    i32 pendingTextureCount;
+};
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char FrontEndPostQueuePendingTextureCountAt1C[
+    (offsetof(FrontEndPostQueueStateView, pendingTextureCount) == 0x1c) ? 1 : -1];
+#endif
+#endif
+
+struct FrontEndUpdateLocals
+{
+    FrontEndVmUpdateView *second69;
+    FrontEndVmUpdateView *first68;
+    FrontEndVmUpdateView *second67;
+    FrontEndVmUpdateView *first66;
+    i32 replayInterruptIndex;
+    i32 gameInterruptIndex;
+    u8 *rgb16Pixel;
+    i32 rgb16X;
+    i32 rgb16Y;
+    u8 *argb32Pixel;
+    i32 argb32X;
+    i32 argb32Y;
+    D3DLOCKED_RECT lockedRect;
+    IDirect3DSurface8 *surface;
+};
+
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+static_assert(offsetof(FrontEndControllerUpdateView, vmIds) == offsetof(SceneSelectControllerView, vmIds), "front-end shared VM handles");
+static_assert(offsetof(FrontEndControllerUpdateView, flags) == kFrontEndFlagsOffset, "front-end update flags");
+#endif
+
+struct MainMenuVmPositions
+{
+    Float3 position11;
+    Float3 position10;
+    Float3 position9;
+    Float3 position8;
+    Float3 position7;
+    Float3 position6;
+    Float3 position17;
+    Float3 position16;
+    Float3 position15;
+    Float3 position14;
+    Float3 position13;
+    Float3 position12;
+    Float3 position5;
+    Float3 position4;
+    Float3 position3;
+    Float3 position2;
+    Float3 position1;
+    Float3 position0;
+};
+
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char FrontEndTextureEntrySizeIs10[
+    (sizeof(FrontEndTextureEntryView) == 0x10) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char FrontEndTextureFormatAtC[
+    (offsetof(FrontEndTextureEntryView, bytesPerPixel) == 0x0c) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char FrontEndVmPositionAt148[
+    (offsetof(FrontEndVmUpdateView, position) == 0x148) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char FrontEndVmDisplayStateAt220[
+    (offsetof(FrontEndVmUpdateView, displayState) == 0x220) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char FrontEndUpdateCursorAt20[
+    (offsetof(FrontEndControllerUpdateView, cursor) == 0x20) ? 1 : -1];
+#endif
+#if !defined(TH095_MATCH_EXACT)
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char FrontEndUpdateReplayColumnCursorAtF8[
+    (offsetof(FrontEndControllerUpdateView, replayColumnCursor) == 0xf8) ? 1 : -1];
+#endif
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char FrontEndUpdateVmIdsAtBF4[
+    (offsetof(FrontEndControllerUpdateView, vmIds) == 0xbf4) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char FrontEndUpdateTransitionVmAt6100[
+    (offsetof(FrontEndControllerUpdateView, transitionVm) == 0x6100)
+        ? 1
+        : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char FrontEndUpdateStateAt610C[
+    (offsetof(FrontEndControllerUpdateView, state) == 0x610c) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char FrontEndUpdateRequestedStateAt6110[
+    (offsetof(FrontEndControllerUpdateView, requestedState) == 0x6110)
+        ? 1
+        : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char FrontEndUpdateFlagsAt6120[
+    (offsetof(FrontEndControllerUpdateView, flags) == 0x6120) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char FrontEndUpdateEntryModeAt6124[
+    (offsetof(FrontEndControllerUpdateView, entryMode) == 0x6124) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char FrontEndUpdateLocalsSizeIs3C[
+    (sizeof(FrontEndUpdateLocals) == 0x3c) ? 1 : -1];
+#endif
+
+#ifdef TH095_MATCH_EXACT
+extern i32 g_FrontEndSupervisorState;
+struct FrontEndSupervisorAudioView
+{
+    ::ZunResult LoadMusic(i32 slot, const char *path);
+    ::ZunResult PlayMusic(i32 slot, i32 unused);
+    ::ZunResult FadeOutMusic(f32 durationSeconds);
+};
+extern FrontEndSupervisorAudioView g_FrontEndSupervisorAudio;
+#define TH095_FRONT_SUPERVISOR g_SceneSupervisor
+#define TH095_FRONT_AUDIO g_FrontEndSupervisorAudio
+#define TH095_FRONT_SUPERVISOR_STATE g_FrontEndSupervisorState
+#define TH095_FRONT_ANM_MANAGER g_SceneAnmManager
+#else
+#define TH095_FRONT_SUPERVISOR g_Supervisor
+#define TH095_FRONT_AUDIO g_Supervisor
+#define TH095_FRONT_SUPERVISOR_STATE g_Supervisor.requestedSceneState
+#define TH095_FRONT_ANM_MANAGER g_AnmManager
+#endif
+
+#if defined(DIFFBUILD) || defined(TH095_MATCH_EXACT)
+#define g_MainMenuDemoWaitFrames g_FrontEndUiState
+#endif
+DIFFABLE_STATIC(i32, g_MainMenuDemoWaitFrames); // 0x004CA2FC
+#if defined(DIFFBUILD) || defined(TH095_MATCH_EXACT)
+DIFFABLE_STATIC(FrontEndGameManagerView *, g_FrontEndGameManager);
+#else
+// Target writes at 0x00446684 and 0x004467C0 publish directly to 0x004C4DF4,
+// Supervisor::photoGameTask (+0x784). A separate production static leaves the
+// Supervisor pointer null and crashes the first retry/return transition when
+// UpdateSceneState reads PhotoGameTaskView::replayMode at +0x120.
+#define g_FrontEndGameManager \
+    TH095_RUNTIME_GLOBAL_PTR(FrontEndGameManagerView, g_RuntimeGameTaskOwner)
+#endif
+extern FrontEndGameManagerView *g_FrontEndGlobalState;
+#if defined(DIFFBUILD) || defined(TH095_MATCH_EXACT)
+extern i32 g_ReplayUsesArchive;
+#define REPLAY_PLAYBACK_SOURCE_LOOSE_FILE 0
+#define REPLAY_PLAYBACK_SOURCE_ARCHIVE 1
+#endif
+extern u16 g_ResultMenuInput;
+extern u16 g_PressedButtons;
+extern u16 g_FrontEndCurrentInput;
+#ifndef DIFFBUILD
+#define g_ResultMenuInput (RuntimeResultMenuInput())
+#define g_PressedButtons (RuntimePressedButtons())
+#define g_FrontEndCurrentInput (RuntimeInputCurrent())
+#endif
+DIFFABLE_STATIC(i32, g_DemoReplayIndex);
+
+#ifndef DIFFBUILD
+#define g_FrontEndGlobalState \
+    TH095_RUNTIME_GLOBAL_PTR(FrontEndGameManagerView, g_RuntimeGlobalStateOwner)
+#endif
+
+static __forceinline u16 FrontEndInputAnd(u16 input, u16 mask)
+{
+    return input & mask;
+}
+
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+bool FrontEndTapMainMenu(float x, float y)
+{
+    if (g_ActiveMenuController == NULL || g_RuntimeGlobalStateOwner != NULL ||
+        FrontEndTitleLoadIncomplete(g_ActiveMenuController)) return false;
+    FrontEndControllerUpdateView *view =
+        static_cast<FrontEndControllerUpdateView *>(g_ActiveMenuController);
+    if (view->requestedState != FRONT_END_REQUESTED_STATE_MAIN_MENU ||
+        view->stateTimer.current < 30 || x < 48 || x > 330 || y < 124 || y >= 352)
+        return false;
+    view->cursor.current = static_cast<int>((y - 124) / 38);
+    static_cast<SceneSelectControllerView *>(g_ActiveMenuController)->UpdateMainMenuSelection();
+    modern::LogStartup("touch: main menu item selected");
+    return true;
+}
+int FrontEndTapSubmenu(float x, float y)
+{
+    if (!g_ActiveMenuController || g_RuntimeGlobalStateOwner ||
+        FrontEndTitleLoadIncomplete(g_ActiveMenuController)) return 0;
+    const auto *view = static_cast<FrontEndControllerUpdateView *>(g_ActiveMenuController);
+    if (view->stateTimer.current < 30) return 0;
+    if (view->requestedState == FRONT_END_REQUESTED_STATE_OPTIONS)
+    {
+        auto *menu = static_cast<OptionsMenuView *>(g_ActiveMenuController);
+        for (int i = 0; i < OPTIONS_MENU_ITEM_COUNT; ++i)
+            if (modern::ios::HitMenuLabel(menu->vmIds[0x6b+i].GetVm(),x,y))
+            {
+                menu->cursor.Set(i); menu->UpdateSelectionSprites();
+                return i == OPTIONS_MENU_ITEM_EXIT ? 2 : 1;
+            }
+    }
+    if (view->requestedState == FRONT_END_REQUESTED_STATE_MUSIC_ROOM)
+    {
+        auto *menu = static_cast<MusicRoomView *>(g_ActiveMenuController);
+        if (menu->state != MUSIC_ROOM_STATE_INTERACTIVE) return 0;
+        for (int i = 0; i < menu->trackCount; ++i)
+            if (modern::ios::HitMenuLabel(menu->trackVms[i].GetVm(),x,y))
+            {
+                menu->cursor.Set(i);
+                for (int j=0;j<menu->trackCount;++j) menu->trackVms[j].SetInterrupt((j!=i)+2);
+                return 2;
+            }
+    }
+    if (view->requestedState == FRONT_END_REQUESTED_STATE_HELP)
+    {
+        auto *menu = static_cast<HelpMenuView *>(g_ActiveMenuController);
+        if (menu->state != HELP_MENU_PAGE_SELECT) return 0;
+        for (int i=0;i<9;++i)
+            if (modern::ios::HitMenuLabel(menu->vmIds[0x91+i].GetVm(),x,y))
+            {
+                menu->cursor.Set(i);
+                for (int j=0;j<9;++j) menu->vmIds.SetInterrupt(0x91+j,(j!=i)+2);
+                return 2;
+            }
+    }
+    return FrontEndTapScene(x,y);
+}
+#endif
+
+static __forceinline u16 FrontEndUpInputMask()
+{
+    return TH_BUTTON_UP;
+}
+
+static __forceinline u16 FrontEndDownInputMask()
+{
+    return TH_BUTTON_DOWN;
+}
+
+#if defined(DIFFBUILD) || defined(TH095_MATCH_EXACT)
+#define TH095_FRONT_DEMO_INTERRUPT_MASK 0x160b
+#else
+#define TH095_FRONT_DEMO_INTERRUPT_MASK TH_BUTTON_DEMO_INTERRUPT
+#endif
+
+static __forceinline i32 FrontEndHelpLoadSnapshot()
+{
+    i32 active = g_HelpLoadActive;
+    return active;
+}
+
+static __forceinline void FrontEndFreePoppedValue(void *block)
+{
+    free(block);
+}
+
+static __forceinline void FrontEndResetTimer(FrontEndControllerTimer *timer)
+{
+    timer->current = 0;
+    timer->subFrame = 0.0f;
+    timer->previous = -999999;
+}
+
+static __forceinline void FrontEndDrainQueueValue(SceneValueQueue *queue)
+{
+    u32 compilerStorage;
+    FrontEndFreePoppedValue(reinterpret_cast<void *>(queue->Pop()));
+}
+
+static __forceinline void FrontEndCreateSceneVm(
+    FrontEndControllerUpdateView *view,
+    i32 scriptIndex)
+{
+    view->vmIds[scriptIndex] =
+        view->sceneAnm->CreateVm(scriptIndex, 7);
+}
+
+#if defined(DIFFBUILD) || defined(TH095_MATCH_EXACT)
+FrontEndGameManagerView *__fastcall CreateFrontEndGameManager(i32 mode);
+
+#define TH095_FRONT_END_REQUESTED_STATE_INITIALIZE 0
+#define TH095_FRONT_END_REQUESTED_STATE_MAIN_MENU 1
+#define TH095_FRONT_END_REQUESTED_STATE_SCENE_SELECT 2
+#define TH095_FRONT_END_REQUESTED_STATE_REPLAY_BROWSER 3
+#define TH095_FRONT_END_REQUESTED_STATE_EXIT 4
+#define TH095_FRONT_END_REQUESTED_STATE_START_GAME 5
+#define TH095_FRONT_END_REQUESTED_STATE_START_REPLAY 6
+#define TH095_FRONT_END_REQUESTED_STATE_OPTIONS 7
+#define TH095_FRONT_END_REQUESTED_STATE_MUSIC_ROOM 8
+#define TH095_FRONT_END_REQUESTED_STATE_HELP 9
+#define TH095_MUSIC_ROOM_STATE_INITIALIZE 0
+#define TH095_REPLAY_BROWSER_STATE_INITIALIZE 0
+#define TH095_OPTIONS_MENU_STATE_INITIALIZE 0
+#else
+#define TH095_FRONT_END_REQUESTED_STATE_INITIALIZE FRONT_END_REQUESTED_STATE_INITIALIZE
+#define TH095_FRONT_END_REQUESTED_STATE_MAIN_MENU FRONT_END_REQUESTED_STATE_MAIN_MENU
+#define TH095_FRONT_END_REQUESTED_STATE_SCENE_SELECT FRONT_END_REQUESTED_STATE_SCENE_SELECT
+#define TH095_FRONT_END_REQUESTED_STATE_REPLAY_BROWSER FRONT_END_REQUESTED_STATE_REPLAY_BROWSER
+#define TH095_FRONT_END_REQUESTED_STATE_EXIT FRONT_END_REQUESTED_STATE_EXIT
+#define TH095_FRONT_END_REQUESTED_STATE_START_GAME FRONT_END_REQUESTED_STATE_START_GAME
+#define TH095_FRONT_END_REQUESTED_STATE_START_REPLAY FRONT_END_REQUESTED_STATE_START_REPLAY
+#define TH095_FRONT_END_REQUESTED_STATE_OPTIONS FRONT_END_REQUESTED_STATE_OPTIONS
+#define TH095_FRONT_END_REQUESTED_STATE_MUSIC_ROOM FRONT_END_REQUESTED_STATE_MUSIC_ROOM
+#define TH095_FRONT_END_REQUESTED_STATE_HELP FRONT_END_REQUESTED_STATE_HELP
+#define TH095_MUSIC_ROOM_STATE_INITIALIZE MUSIC_ROOM_STATE_INITIALIZE
+#define TH095_REPLAY_BROWSER_STATE_INITIALIZE REPLAY_BROWSER_STATE_INITIALIZE
+#define TH095_OPTIONS_MENU_STATE_INITIALIZE OPTIONS_MENU_STATE_INITIALIZE
+#endif
+
+ChainCallbackResult SceneSelectControllerView::Update()
+{
+#define view (reinterpret_cast<FrontEndControllerUpdateView *>(this))
+    FrontEndUpdateLocals locals;
+#ifdef TH095_IOS
+    static int loggedState = -999;
+    if (loggedState != view->requestedState)
+    {
+        loggedState = view->requestedState;
+        char message[192];
+        snprintf(message, sizeof(message), "title-update: state=%d flags=%x scene=%p flags-offset=%zu help-active=%d",
+                 loggedState, view->flags, view->sceneAnm, offsetof(FrontEndControllerUpdateView, flags), FrontEndHelpLoadSnapshot());
+        modern::LogStartup(message);
+    }
+#endif
+
+    switch (view->requestedState)
+    {
+    case TH095_FRONT_END_REQUESTED_STATE_INITIALIZE:
+    {
+#if defined(TH095_MATCH_EXACT)
+        if (view->titleLoadFailed)
+#else
+        if (view->flagBits.titleLoadFailed)
+#endif
+        {
+            TH095_FRONT_SUPERVISOR.StopReplayScan();
+            TH095_FRONT_SUPERVISOR_STATE = 6;
+            return CHAIN_CALLBACK_RESULT_CONTINUE;
+        }
+        if (FrontEndHelpLoadSnapshot() != 0)
+        {
+            return CHAIN_CALLBACK_RESULT_BREAK;
+        }
+
+        TH095_FRONT_SUPERVISOR.StopReplayScan();
+        locals.surface = NULL;
+        reinterpret_cast<FrontEndAnmStorageView *>(view->sceneAnm)
+            ->textures[1]
+            .texture->GetSurfaceLevel(0, &locals.surface);
+        locals.surface->LockRect(&locals.lockedRect, NULL, 0);
+        if (reinterpret_cast<FrontEndAnmStorageView *>(view->sceneAnm)
+                ->textures[1]
+                .bytesPerPixel == 4)
+        {
+            for (locals.argb32Y = 0; locals.argb32Y < 192;
+                 locals.argb32Y++)
+            {
+                locals.argb32Pixel =
+                    reinterpret_cast<u8 *>(locals.lockedRect.pBits) +
+                    locals.argb32Y * locals.lockedRect.Pitch;
+                for (locals.argb32X = 0; locals.argb32X < 256;
+                     locals.argb32X++)
+                {
+                    locals.argb32Pixel[0] = 0;
+                    locals.argb32Pixel[1] = 0;
+                    locals.argb32Pixel[2] = 0;
+                    locals.argb32Pixel[3] = 0xff;
+                    locals.argb32Pixel += 4;
+                }
+            }
+        }
+        else
+        {
+            for (locals.rgb16Y = 0; locals.rgb16Y < 192;
+                 locals.rgb16Y++)
+            {
+                locals.rgb16Pixel =
+                    reinterpret_cast<u8 *>(locals.lockedRect.pBits) +
+                    locals.rgb16Y * locals.lockedRect.Pitch;
+                for (locals.rgb16X = 0; locals.rgb16X < 256;
+                     locals.rgb16X++)
+                {
+                    locals.rgb16Pixel[0] = 0;
+                    locals.rgb16Pixel[1] = 0xf0;
+                    locals.rgb16Pixel += 2;
+                }
+            }
+        }
+        locals.surface->UnlockRect();
+        locals.surface->Release();
+        g_MainMenuDemoWaitFrames = 0;
+
+        if (g_ReplayUsesArchive == REPLAY_PLAYBACK_SOURCE_LOOSE_FILE)
+        {
+            TH095_FRONT_AUDIO.LoadMusic(0, "bgm/th09_00.wav");
+            TH095_FRONT_AUDIO.PlayMusic(0, 0);
+        }
+        else
+        {
+            view->entryMode = 0;
+            g_ReplayUsesArchive = REPLAY_PLAYBACK_SOURCE_LOOSE_FILE;
+        }
+
+        switch (view->entryMode)
+        {
+        case 0:
+        {
+            view->requestedState = TH095_FRONT_END_REQUESTED_STATE_MAIN_MENU;
+            FrontEndResetTimer(&view->stateTimer);
+            view->state = TH095_MAIN_MENU_STATE_INITIALIZE;
+            FrontEndCreateSceneVm(view, 0x66);
+            FrontEndCreateSceneVm(view, 0x67);
+            FrontEndCreateSceneVm(view, 0x19);
+            FrontEndCreateSceneVm(view, 0x1a);
+            // Both target handles are four-byte VM ids; preserving the
+            // returned wrapper as a whole is codegen-significant here.
+            *reinterpret_cast<SceneAnmVmId *>(&view->transitionVm) =
+                view->transitionAnm->CreateVm(0, 7);
+            FrontEndCreateSceneVm(view, 0x1b);
+            FrontEndCreateSceneVm(view, 0x64);
+            FrontEndCreateSceneVm(view, 0x65);
+            break;
+        }
+        case 1:
+        {
+            view->requestedState = TH095_FRONT_END_REQUESTED_STATE_SCENE_SELECT;
+            view->state = TH095_SCENE_SELECT_STATE_INITIALIZE;
+            FrontEndResetTimer(&view->stateTimer);
+            FrontEndCreateSceneVm(view, 0x19);
+            FrontEndCreateSceneVm(view, 0x1a);
+            *reinterpret_cast<SceneAnmVmId *>(&view->transitionVm) =
+                view->transitionAnm->CreateVm(0, 7);
+            FrontEndCreateSceneVm(view, 0x1b);
+            FrontEndCreateSceneVm(view, 0x64);
+            FrontEndCreateSceneVm(view, 0x65);
+            view->entryMode = 0;
+            return CHAIN_CALLBACK_RESULT_CONTINUE;
+        }
+        case 2:
+        {
+            view->requestedState = TH095_FRONT_END_REQUESTED_STATE_REPLAY_BROWSER;
+            view->state = TH095_REPLAY_BROWSER_STATE_INITIALIZE;
+            FrontEndResetTimer(&view->stateTimer);
+            view->cursor.Set(1);
+            FrontEndCreateSceneVm(view, 0x19);
+            FrontEndCreateSceneVm(view, 0x1a);
+            *reinterpret_cast<SceneAnmVmId *>(&view->transitionVm) =
+                view->transitionAnm->CreateVm(0, 7);
+            FrontEndCreateSceneVm(view, 0x1b);
+            FrontEndCreateSceneVm(view, 0x64);
+            FrontEndCreateSceneVm(view, 0x65);
+            view->entryMode = 0;
+            return CHAIN_CALLBACK_RESULT_CONTINUE;
+        }
+        default:
+            break;
+        }
+    }
+    case TH095_FRONT_END_REQUESTED_STATE_MAIN_MENU:
+        this->UpdateMainMenu();
+        break;
+
+    case TH095_FRONT_END_REQUESTED_STATE_SCENE_SELECT:
+        this->UpdateSceneSelect();
+        break;
+
+    case TH095_FRONT_END_REQUESTED_STATE_REPLAY_BROWSER:
+        reinterpret_cast<ReplayBrowserView *>(this)->Update();
+        break;
+
+    case TH095_FRONT_END_REQUESTED_STATE_OPTIONS:
+        if (reinterpret_cast<OptionsMenuView *>(this)->Update() ==
+            CHAIN_CALLBACK_RESULT_EXIT_GAME_ERROR)
+        {
+            return CHAIN_CALLBACK_RESULT_EXIT_GAME_ERROR;
+        }
+        break;
+
+    case TH095_FRONT_END_REQUESTED_STATE_MUSIC_ROOM:
+        reinterpret_cast<MusicRoomView *>(this)->UpdateMusicRoom();
+        break;
+
+    case TH095_FRONT_END_REQUESTED_STATE_HELP:
+        reinterpret_cast<HelpMenuView *>(this)->UpdateHelpMenu();
+        break;
+
+    case TH095_FRONT_END_REQUESTED_STATE_START_GAME:
+        if ((view->stateTimer.current == 1) != 0)
+        {
+            TH095_FRONT_AUDIO.FadeOutMusic(2.0f);
+            if (FrontEndHelpLoadSnapshot() != 0)
+            {
+                return CHAIN_CALLBACK_RESULT_CONTINUE;
+            }
+            TH095_FRONT_SUPERVISOR.StopReplayScan();
+#if !defined(DIFFBUILD) && !defined(TH095_MATCH_EXACT)
+            g_FrontEndGameManager = reinterpret_cast<FrontEndGameManagerView *>(
+                PhotoGameTaskView::Create(REPLAY_MANAGER_RECORD));
+#else
+            g_FrontEndGameManager = CreateFrontEndGameManager(0);
+#endif
+            if (g_FrontEndGameManager == NULL)
+            {
+                TH095_FRONT_SUPERVISOR_STATE = 1;
+            }
+        }
+        if ((view->stateTimer.current < 40) != 0)
+        {
+            break;
+        }
+        if (view->transitionReady != 0)
+        {
+            if (g_FrontEndGlobalState->transitionBlocked)
+            {
+                TH095_FRONT_SUPERVISOR_STATE = 1;
+                break;
+            }
+            for (locals.gameInterruptIndex = 0;
+                 locals.gameInterruptIndex < 0x9a;
+                 locals.gameInterruptIndex++)
+            {
+                TH095_FRONT_ANM_MANAGER->SetInterrupt(
+                    view->vmIds[locals.gameInterruptIndex], 1);
+            }
+            view->transitionVm.SetInterrupt(1);
+            TH095_FRONT_SUPERVISOR_STATE = 3;
+            if (g_ReplayUsesArchive == REPLAY_PLAYBACK_SOURCE_LOOSE_FILE)
+            {
+                TH095_FRONT_AUDIO.PlayMusic(0, 0);
+            }
+            break;
+        }
+        break;
+
+    case TH095_FRONT_END_REQUESTED_STATE_START_REPLAY:
+        if ((view->stateTimer.current == 1) != 0)
+        {
+            if (g_ReplayUsesArchive == REPLAY_PLAYBACK_SOURCE_LOOSE_FILE)
+            {
+                TH095_FRONT_AUDIO.FadeOutMusic(2.0f);
+            }
+            if (FrontEndHelpLoadSnapshot() != 0)
+            {
+                return CHAIN_CALLBACK_RESULT_CONTINUE;
+            }
+            TH095_FRONT_SUPERVISOR.StopReplayScan();
+#if !defined(DIFFBUILD) && !defined(TH095_MATCH_EXACT)
+            g_FrontEndGameManager = reinterpret_cast<FrontEndGameManagerView *>(
+                PhotoGameTaskView::Create(REPLAY_MANAGER_PLAYBACK));
+#else
+            g_FrontEndGameManager = CreateFrontEndGameManager(1);
+#endif
+            if (g_FrontEndGameManager == NULL)
+            {
+                TH095_FRONT_SUPERVISOR_STATE = 1;
+            }
+        }
+        if ((view->stateTimer.current < 40) != 0)
+        {
+            break;
+        }
+        if (view->transitionReady != 0)
+        {
+            if (g_FrontEndGlobalState->transitionBlocked)
+            {
+                TH095_FRONT_SUPERVISOR_STATE = 1;
+                break;
+            }
+            for (locals.replayInterruptIndex = 0;
+                 locals.replayInterruptIndex < 0x9a;
+                 locals.replayInterruptIndex++)
+            {
+                TH095_FRONT_ANM_MANAGER->SetInterrupt(
+                    view->vmIds[locals.replayInterruptIndex], 1);
+            }
+            view->transitionVm.SetInterrupt(1);
+            TH095_FRONT_SUPERVISOR_STATE = 7;
+            if (g_ReplayUsesArchive == REPLAY_PLAYBACK_SOURCE_LOOSE_FILE)
+            {
+                TH095_FRONT_AUDIO.PlayMusic(0, 0);
+            }
+            break;
+        }
+        break;
+
+    case TH095_FRONT_END_REQUESTED_STATE_EXIT:
+        if (FrontEndHelpLoadSnapshot() != 0)
+        {
+            return CHAIN_CALLBACK_RESULT_CONTINUE;
+        }
+        TH095_FRONT_SUPERVISOR.StopReplayScan();
+        TH095_FRONT_SUPERVISOR_STATE = 1;
+        break;
+    }
+
+    // The controller overlays these VM ids as POD storage; keep the exact
+    // AnmVmId::GetVm ABI while naming their canonical array ownership.
+    locals.first66 =
+        reinterpret_cast<FrontEndVmUpdateView *>(
+            reinterpret_cast<AnmVmId *>(&view->vmIds.values[0x66])
+                ->GetVm());
+    locals.second67 =
+        reinterpret_cast<FrontEndVmUpdateView *>(
+            reinterpret_cast<AnmVmId *>(&view->vmIds.values[0x67])
+                ->GetVm());
+    if (locals.first66 != NULL && locals.second67 != NULL)
+    {
+        locals.second67->position = locals.first66->position;
+        locals.second67->position.x += 512.0f;
+        locals.second67->displayState = locals.first66->displayState;
+    }
+
+    locals.first68 = reinterpret_cast<FrontEndVmUpdateView *>(
+        reinterpret_cast<AnmVmId *>(&view->vmIds.values[0x68])
+            ->GetVm());
+    locals.second69 = reinterpret_cast<FrontEndVmUpdateView *>(
+        reinterpret_cast<AnmVmId *>(&view->vmIds.values[0x69])
+            ->GetVm());
+    if (locals.first68 != NULL && locals.second69 != NULL)
+    {
+        locals.second69->position = locals.first68->position;
+        locals.second69->position.x += 512.0f;
+        locals.second69->displayState = locals.first68->displayState;
+    }
+
+    if (view->animationTimer.current % 5 == 0)
+    {
+        view->sceneAnm->CreateVm(0x1c, 0);
+    }
+    view->stateTimer.Tick();
+    view->animationTimer.Tick();
+#undef view
+    return CHAIN_CALLBACK_RESULT_CONTINUE;
+}
+
+void SceneSelectControllerView::CloseMainMenu()
+{
+    this->vmIds.SetInterrupt(0, 1);
+    this->vmIds.SetInterrupt(1, 1);
+    this->vmIds.SetInterrupt(2, 1);
+    this->vmIds.SetInterrupt(3, 1);
+    this->vmIds.SetInterrupt(5, 1);
+    this->vmIds.SetInterrupt(6, 1);
+    this->vmIds.SetInterrupt(7, 1);
+    this->vmIds.SetInterrupt(8, 1);
+    this->vmIds.SetInterrupt(9, 1);
+    this->vmIds.SetInterrupt(11, 1);
+    this->vmIds.SetInterrupt(12, 1);
+    this->vmIds.SetInterrupt(13, 1);
+    this->vmIds.SetInterrupt(14, 1);
+    this->vmIds.SetInterrupt(15, 1);
+    this->vmIds.SetInterrupt(17, 1);
+    this->vmIds.SetInterrupt(102, 1);
+    this->vmIds.SetInterrupt(103, 1);
+    this->vmIds.SetInterrupt(4, 1);
+    this->vmIds.SetInterrupt(10, 1);
+    this->vmIds.SetInterrupt(16, 1);
+}
+
+void SceneSelectControllerView::UpdateMainMenuSelection()
+{
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+#define MAIN_MENU_VM(offset) (this->vmIds.values[((offset) - 0xbf4) / sizeof(SceneAnmVmId)])
+#else
+#define MAIN_MENU_VM(offset)                                                   \
+    (*reinterpret_cast<SceneAnmVmId *>(reinterpret_cast<u8 *>(this) + offset))
+#endif
+    TH095_FRONT_ANM_MANAGER->SetInterrupt(
+        MAIN_MENU_VM(0xbf4), (this->GetSelectedGroup() != 0) + 2);
+    TH095_FRONT_ANM_MANAGER->SetInterrupt(
+        MAIN_MENU_VM(0xc0c), (this->GetSelectedGroup() != 0) + 2);
+    TH095_FRONT_ANM_MANAGER->SetInterrupt(
+        MAIN_MENU_VM(0xbf8), (this->GetSelectedGroup() != 1) + 2);
+    TH095_FRONT_ANM_MANAGER->SetInterrupt(
+        MAIN_MENU_VM(0xc10), (this->GetSelectedGroup() != 1) + 2);
+    TH095_FRONT_ANM_MANAGER->SetInterrupt(
+        MAIN_MENU_VM(0xbfc), (this->GetSelectedGroup() != 2) + 2);
+    TH095_FRONT_ANM_MANAGER->SetInterrupt(
+        MAIN_MENU_VM(0xc14), (this->GetSelectedGroup() != 2) + 2);
+    TH095_FRONT_ANM_MANAGER->SetInterrupt(
+        MAIN_MENU_VM(0xc00), (this->GetSelectedGroup() != 3) + 2);
+    TH095_FRONT_ANM_MANAGER->SetInterrupt(
+        MAIN_MENU_VM(0xc18), (this->GetSelectedGroup() != 3) + 2);
+    TH095_FRONT_ANM_MANAGER->SetInterrupt(
+        MAIN_MENU_VM(0xc04), (this->GetSelectedGroup() != 4) + 2);
+    TH095_FRONT_ANM_MANAGER->SetInterrupt(
+        MAIN_MENU_VM(0xc1c), (this->GetSelectedGroup() != 4) + 2);
+    TH095_FRONT_ANM_MANAGER->SetInterrupt(
+        MAIN_MENU_VM(0xc08), (this->GetSelectedGroup() != 5) + 2);
+    TH095_FRONT_ANM_MANAGER->SetInterrupt(
+        MAIN_MENU_VM(0xc20), (this->GetSelectedGroup() != 5) + 2);
+    TH095_FRONT_ANM_MANAGER->SetInterrupt(
+        MAIN_MENU_VM(0xc24), (this->GetSelectedGroup() != 0) + 2);
+    TH095_FRONT_ANM_MANAGER->SetInterrupt(
+        MAIN_MENU_VM(0xc28), (this->GetSelectedGroup() != 1) + 2);
+    TH095_FRONT_ANM_MANAGER->SetInterrupt(
+        MAIN_MENU_VM(0xc2c), (this->GetSelectedGroup() != 2) + 2);
+    TH095_FRONT_ANM_MANAGER->SetInterrupt(
+        MAIN_MENU_VM(0xc30), (this->GetSelectedGroup() != 3) + 2);
+    TH095_FRONT_ANM_MANAGER->SetInterrupt(
+        MAIN_MENU_VM(0xc34), (this->GetSelectedGroup() != 4) + 2);
+    TH095_FRONT_ANM_MANAGER->SetInterrupt(
+        MAIN_MENU_VM(0xc38), (this->GetSelectedGroup() != 5) + 2);
+#undef MAIN_MENU_VM
+}
+
+ChainCallbackResult SceneSelectControllerView::UpdateMainMenu()
+{
+#define view (reinterpret_cast<FrontEndControllerUpdateView *>(this))
+    MainMenuVmPositions positions;
+
+    switch (view->state)
+    {
+    case TH095_MAIN_MENU_STATE_INITIALIZE:
+    {
+        view->cursor.count = 6;
+        view->cursor.wraps = 1;
+        view->state = TH095_MAIN_MENU_STATE_ACTIVE;
+
+#define CREATE_MAIN_MENU_VM(position, index, yValue)                           \
+    positions.position.x = 64.0f;                                             \
+    positions.position.y = yValue;                                            \
+    positions.position.z = 0.0f;                                              \
+    view->vmIds[index] =                                                      \
+        view->sceneAnm->CreateVmAtScreen(index, &positions.position)
+        CREATE_MAIN_MENU_VM(position0, 0, 130.0f);
+        CREATE_MAIN_MENU_VM(position1, 1, 168.0f);
+        CREATE_MAIN_MENU_VM(position2, 2, 206.0f);
+        CREATE_MAIN_MENU_VM(position3, 3, 244.0f);
+        CREATE_MAIN_MENU_VM(position4, 4, 282.0f);
+        CREATE_MAIN_MENU_VM(position5, 5, 320.0f);
+        CREATE_MAIN_MENU_VM(position12, 12, 130.0f);
+        CREATE_MAIN_MENU_VM(position13, 13, 168.0f);
+        CREATE_MAIN_MENU_VM(position14, 14, 206.0f);
+        CREATE_MAIN_MENU_VM(position15, 15, 244.0f);
+        CREATE_MAIN_MENU_VM(position16, 16, 282.0f);
+        CREATE_MAIN_MENU_VM(position17, 17, 320.0f);
+        CREATE_MAIN_MENU_VM(position6, 6, 130.0f);
+        CREATE_MAIN_MENU_VM(position7, 7, 168.0f);
+        CREATE_MAIN_MENU_VM(position8, 8, 206.0f);
+        CREATE_MAIN_MENU_VM(position9, 9, 244.0f);
+        CREATE_MAIN_MENU_VM(position10, 10, 282.0f);
+        CREATE_MAIN_MENU_VM(position11, 11, 320.0f);
+#undef CREATE_MAIN_MENU_VM
+        FrontEndResetTimer(&view->stateTimer);
+    }
+    case TH095_MAIN_MENU_STATE_ACTIVE:
+    if ((view->stateTimer.current < 30) != 0)
+    {
+        return CHAIN_CALLBACK_RESULT_CONTINUE;
+    }
+    if ((view->stateTimer.current == 30) != 0)
+    {
+        this->UpdateMainMenuSelection();
+#ifdef TH095_IOS
+        for (int menuIndex = 0; menuIndex < 18; ++menuIndex)
+        {
+            AnmVm *menuVm = view->vmIds[menuIndex].GetVm();
+            char menuLog[300];
+            if (menuVm)
+                snprintf(menuLog, sizeof(menuLog), "title-vm: index=%d id=%d layer=%u flags=%08x sprite=%d color=%08x position=%.1f,%.1f offset=%.1f,%.1f interrupt=%d", menuIndex, menuVm->id, menuVm->renderMode, menuVm->flagsWord, menuVm->activeSpriteIndex, menuVm->color1.color, menuVm->position.x, menuVm->position.y, menuVm->positionOffset.x, menuVm->positionOffset.y, menuVm->pendingInterrupt);
+            else
+                snprintf(menuLog, sizeof(menuLog), "title-vm: index=%d missing id=%d", menuIndex, view->vmIds[menuIndex].value);
+            modern::LogStartup(menuLog);
+        }
+#endif
+    }
+
+    view->cursor.SaveCurrent();
+    if ((u16)(FrontEndInputAnd(g_PressedButtons, TH_BUTTON_UP) != 0 ||
+              (g_ResultMenuInput & FrontEndUpInputMask()) != 0) != 0)
+    {
+        view->cursor.Move(-1);
+    }
+    if ((u16)(FrontEndInputAnd(g_PressedButtons, TH_BUTTON_DOWN) != 0 ||
+              (g_ResultMenuInput & FrontEndDownInputMask()) != 0) != 0)
+    {
+        view->cursor.Move(1);
+    }
+    if (view->cursor.HasChanged())
+    {
+        g_SoundPlayer.PlaySoundByIdx(SOUND_MOVE_MENU, 0);
+        this->UpdateMainMenuSelection();
+    }
+
+    if (FrontEndInputAnd(g_FrontEndCurrentInput, TH095_FRONT_DEMO_INTERRUPT_MASK) != 0)
+    {
+        g_MainMenuDemoWaitFrames = 0;
+    }
+    else
+    {
+        g_MainMenuDemoWaitFrames++;
+        if (g_MainMenuDemoWaitFrames >= 1800)
+        {
+            g_MainMenuDemoWaitFrames = 0;
+            g_ReplayUsesArchive = REPLAY_PLAYBACK_SOURCE_ARCHIVE;
+            sprintf(g_SelectedReplayPath, "demo/demo%d.rpy", g_DemoReplayIndex);
+            g_DemoReplayIndex++;
+            g_DemoReplayIndex %= 3;
+            view->requestedState = TH095_FRONT_END_REQUESTED_STATE_START_REPLAY;
+            FrontEndResetTimer(&view->stateTimer);
+            view->state = 0;
+            break;
+        }
+    }
+
+    if (FrontEndInputAnd(g_PressedButtons, 0x1002) != 0)
+    {
+        g_SoundPlayer.PlaySoundByIdx(SOUND_SELECT, 0);
+        switch (view->cursor.GetCurrent())
+        {
+        case 0:
+        {
+            this->CloseMainMenu();
+            view->requestedState = TH095_FRONT_END_REQUESTED_STATE_SCENE_SELECT;
+            view->state = TH095_SCENE_SELECT_STATE_INITIALIZE;
+            FrontEndResetTimer(&view->stateTimer);
+            while (FrontEndHelpLoadSnapshot() != 0)
+            {
+                Sleep(1);
+            }
+// Preserve the target compiler's private-label buckets in exact builds while
+// exposing the proven contiguous queue ownership in the maintainable build.
+#if defined(TH095_MATCH_EXACT)
+#define FRONT_END_GROUP_PREVIEW_DATA_QUEUE                                  \
+    reinterpret_cast<SceneValueQueue *>(                                    \
+        reinterpret_cast<u8 *>(this) + 0x61b8)
+#define FRONT_END_SCENE_PREVIEW_DATA_QUEUE                                  \
+    reinterpret_cast<SceneValueQueue *>(                                    \
+        reinterpret_cast<u8 *>(this) + 0x6248)
+#define FRONT_END_GROUP_PREVIEW_SIZE_COUNT                                  \
+    (*reinterpret_cast<i32 *>(reinterpret_cast<u8 *>(this) + 0x6240))
+#define FRONT_END_SCENE_PREVIEW_SIZE_COUNT                                  \
+    (*reinterpret_cast<i32 *>(reinterpret_cast<u8 *>(this) + 0x62d0))
+#define FRONT_END_GROUP_PREVIEW_COUNT                                       \
+    (*reinterpret_cast<i32 *>(reinterpret_cast<u8 *>(this) + 0x6318))
+#define FRONT_END_SCENE_PREVIEW_COUNT                                       \
+    (*reinterpret_cast<i32 *>(reinterpret_cast<u8 *>(this) + 0x6360))
+#define FRONT_END_LOADED_GROUP_COUNT                                        \
+    (*reinterpret_cast<i32 *>(reinterpret_cast<u8 *>(this) + 0x63a8))
+#define FRONT_END_SELECTION_COUNT                                           \
+    (*reinterpret_cast<i32 *>(reinterpret_cast<u8 *>(this) + 0x6168))
+#define FRONT_END_LOADED_SCENE_COUNT                                        \
+    (*reinterpret_cast<i32 *>(reinterpret_cast<u8 *>(this) + 0x61b0))
+#else
+#define FRONT_END_GROUP_PREVIEW_DATA_QUEUE (&this->groupPreviewDataQueue)
+#define FRONT_END_SCENE_PREVIEW_DATA_QUEUE (&this->scenePreviewDataQueue)
+#define FRONT_END_GROUP_PREVIEW_SIZE_COUNT (this->groupPreviewSizeQueue.count)
+#define FRONT_END_SCENE_PREVIEW_SIZE_COUNT (this->scenePreviewSizeQueue.count)
+#define FRONT_END_GROUP_PREVIEW_COUNT (this->groupPreviewQueue.count)
+#define FRONT_END_SCENE_PREVIEW_COUNT (this->scenePreviewQueue.count)
+#define FRONT_END_LOADED_GROUP_COUNT (this->loadedGroupQueue.count)
+#define FRONT_END_SELECTION_COUNT (this->selectionQueue.count)
+#define FRONT_END_LOADED_SCENE_COUNT (this->loadedSceneQueue.count)
+#endif
+            while (FRONT_END_GROUP_PREVIEW_DATA_QUEUE->Size() != 0)
+            {
+                FrontEndDrainQueueValue(FRONT_END_GROUP_PREVIEW_DATA_QUEUE);
+            }
+            while (FRONT_END_SCENE_PREVIEW_DATA_QUEUE->Size() != 0)
+            {
+                FrontEndDrainQueueValue(FRONT_END_SCENE_PREVIEW_DATA_QUEUE);
+            }
+            FRONT_END_GROUP_PREVIEW_SIZE_COUNT = 0;
+            FRONT_END_SCENE_PREVIEW_SIZE_COUNT = 0;
+            FRONT_END_GROUP_PREVIEW_COUNT = 0;
+            FRONT_END_SCENE_PREVIEW_COUNT = 0;
+            FRONT_END_LOADED_GROUP_COUNT = 0;
+            FRONT_END_SELECTION_COUNT = 0;
+            FRONT_END_LOADED_SCENE_COUNT = 0;
+#undef FRONT_END_GROUP_PREVIEW_DATA_QUEUE
+#undef FRONT_END_SCENE_PREVIEW_DATA_QUEUE
+#undef FRONT_END_GROUP_PREVIEW_SIZE_COUNT
+#undef FRONT_END_SCENE_PREVIEW_SIZE_COUNT
+#undef FRONT_END_GROUP_PREVIEW_COUNT
+#undef FRONT_END_SCENE_PREVIEW_COUNT
+#undef FRONT_END_LOADED_GROUP_COUNT
+#undef FRONT_END_SELECTION_COUNT
+#undef FRONT_END_LOADED_SCENE_COUNT
+#if defined(TH095_MATCH_EXACT)
+#define FRONT_END_PENDING_TEXTURE_COUNT                                     \
+    (*reinterpret_cast<i32 *>(reinterpret_cast<u8 *>(this) + 0x63cc))
+#define FRONT_END_STATE_HISTORY_COUNT                                       \
+    (*reinterpret_cast<i32 *>(reinterpret_cast<u8 *>(this) + 0x63bc))
+#define FRONT_END_CURRENT_DISPLAY_STATE                                     \
+    (*reinterpret_cast<i8 *>(reinterpret_cast<u8 *>(this) + 0xe92))
+#else
+#define FRONT_END_PENDING_TEXTURE_COUNT                                     \
+    (reinterpret_cast<FrontEndPostQueueStateView *>(&this->stateHistory)    \
+         ->pendingTextureCount)
+#define FRONT_END_STATE_HISTORY_COUNT (this->stateHistory.count)
+#define FRONT_END_CURRENT_DISPLAY_STATE (this->currentDisplayState)
+#endif
+            FRONT_END_PENDING_TEXTURE_COUNT = 0;
+            FRONT_END_STATE_HISTORY_COUNT = 0;
+            FRONT_END_CURRENT_DISPLAY_STATE = -1;
+#undef FRONT_END_PENDING_TEXTURE_COUNT
+#undef FRONT_END_STATE_HISTORY_COUNT
+#undef FRONT_END_CURRENT_DISPLAY_STATE
+            return CHAIN_CALLBACK_RESULT_CONTINUE;
+        }
+        case 1:
+            this->CloseMainMenu();
+            view->requestedState = TH095_FRONT_END_REQUESTED_STATE_REPLAY_BROWSER;
+            view->state = TH095_REPLAY_BROWSER_STATE_INITIALIZE;
+            FrontEndResetTimer(&view->stateTimer);
+            return CHAIN_CALLBACK_RESULT_CONTINUE;
+        case 3:
+            this->CloseMainMenu();
+            view->requestedState = TH095_FRONT_END_REQUESTED_STATE_OPTIONS;
+            view->state = TH095_OPTIONS_MENU_STATE_INITIALIZE;
+            FrontEndResetTimer(&view->stateTimer);
+            return CHAIN_CALLBACK_RESULT_CONTINUE;
+        case 2:
+            // The target emits the state-7 block before state 8, while its
+            // adjacent switch table routes menu row 2 to state 8 and row 3
+            // to state 7.  Keeping the cases in this source order preserves
+            // both the target block chronology and the real menu semantics;
+            // ordering these labels numerically makes a relocation-normalized
+            // COFF comparison look exact while swapping Music Room/Options in
+            // the fully linked executable.
+            this->CloseMainMenu();
+            view->requestedState = TH095_FRONT_END_REQUESTED_STATE_MUSIC_ROOM;
+            view->state = TH095_MUSIC_ROOM_STATE_INITIALIZE;
+            FrontEndResetTimer(&view->stateTimer);
+            return CHAIN_CALLBACK_RESULT_CONTINUE;
+        case 4:
+            this->CloseMainMenu();
+            view->requestedState = TH095_FRONT_END_REQUESTED_STATE_HELP;
+            view->state = TH095_HELP_STATE_INITIALIZE;
+            FrontEndResetTimer(&view->stateTimer);
+            return CHAIN_CALLBACK_RESULT_CONTINUE;
+        case 5:
+        exitMainMenu:
+            view->requestedState = TH095_FRONT_END_REQUESTED_STATE_EXIT;
+            view->state = 0;
+            FrontEndResetTimer(&view->stateTimer);
+            return CHAIN_CALLBACK_RESULT_CONTINUE;
+        }
+    }
+
+    if (FrontEndInputAnd(g_PressedButtons, 9) != 0)
+    {
+        g_SoundPlayer.PlaySoundByIdx(SOUND_BACK, 0);
+        if (view->cursor.GetCurrent() == 5)
+        {
+            goto exitMainMenu;
+        }
+        view->cursor.Set(5);
+        this->UpdateMainMenuSelection();
+    }
+    break;
+    default:
+        break;
+    }
+#undef view
+    return CHAIN_CALLBACK_RESULT_CONTINUE;
+}
+
+} // namespace th095

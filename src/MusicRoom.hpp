@@ -1,0 +1,130 @@
+#ifdef TH095_MATCH_EXACT
+#include "MusicRoomExact.hpp"
+#else
+#ifndef TH095_MUSIC_ROOM_HPP
+#define TH095_MUSIC_ROOM_HPP
+
+#include "ReplayBrowser.hpp"
+
+namespace th095
+{
+
+#ifndef DIFFBUILD
+typedef i32 MusicRoomState;
+enum MusicRoomStateValue
+{
+    MUSIC_ROOM_STATE_INITIALIZE = 0,
+    MUSIC_ROOM_STATE_TRACK_LIST_REVEAL = 1,
+    MUSIC_ROOM_STATE_INTERACTIVE = 2,
+};
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char MusicRoomStateSizeIs4[
+    (sizeof(MusicRoomState) == sizeof(i32)) ? 1 : -1];
+#endif
+#endif
+
+struct MusicRoomTrack
+{
+    char title[64];
+    char path[64];
+    char descriptions[8][64];
+};
+
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+#pragma pack(push, 4)
+#endif
+struct MusicRoomView
+{
+    SceneAnmLoadedView *sceneAnm;
+    SceneAnmLoadedView *transitionAnm;
+    ZunTimer stateTimer;
+    ZunTimer animationTimer; // +0x14; advanced by the shared front-end update
+    ResultScreenReplayCursor cursor;
+    u8 unknown00f8[0xafc];
+    SceneAnmVmIdArray vmIds;
+    u8 unknown0e88[0x174];
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+    u8 nativeOverlayGrowth[kFrontEndTextGrowth + 80 * kFrontEndPointerGrowth];
+#endif
+    char *commentFile;
+    char titles[32][64];
+    char paths[32][64];
+    char descriptions[32][8][64];
+    SceneAnmVmId trackVms[32];
+    SceneAnmVmId descriptionVms[8];
+    u8 unknown60a0[0x60];
+    AnmVmId transitionVm;
+    i32 trackCount;
+    u8 unknown6108[4];
+#ifdef DIFFBUILD
+    i32 state;
+#else
+    MusicRoomState state;
+#endif
+#ifdef DIFFBUILD
+    i32 requestedState;
+#else
+    FrontEndRequestedState requestedState;
+#endif
+
+    i32 UpdateMusicRoom();
+};
+
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+#pragma pack(pop)
+static_assert(offsetof(MusicRoomView, requestedState) == kFrontEndFlagsOffset - 0x10, "music state owner");
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char MusicRoomAnimationTimerAt14[
+    (offsetof(MusicRoomView, animationTimer) == 0x14) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char MusicRoomCommentFileAtFFC[
+    (offsetof(MusicRoomView, commentFile) == 0xffc) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char MusicRoomTitlesAt1000[
+    (offsetof(MusicRoomView, titles) == 0x1000) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char MusicRoomPathsAt1800[
+    (offsetof(MusicRoomView, paths) == 0x1800) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char MusicRoomDescriptionsAt2000[
+    (offsetof(MusicRoomView, descriptions) == 0x2000) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char MusicRoomTrackVmsAt6000[
+    (offsetof(MusicRoomView, trackVms) == 0x6000) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char MusicRoomDescriptionVmsAt6080[
+    (offsetof(MusicRoomView, descriptionVms) == 0x6080) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char MusicRoomTransitionVmAt6100[
+    (offsetof(MusicRoomView, transitionVm) == 0x6100) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char MusicRoomTrackCountAt6104[
+    (offsetof(MusicRoomView, trackCount) == 0x6104) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char MusicRoomStateAt610C[
+    (offsetof(MusicRoomView, state) == 0x610c) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char MusicRoomRequestedStateAt6110[
+    (offsetof(MusicRoomView, requestedState) == 0x6110) ? 1 : -1];
+#endif
+
+char *__fastcall SkipMusicCommentLine(char *cursor, i32 *remaining);
+char *__fastcall ReadMusicCommentLine(char *destination, char *cursor,
+                                      i32 *remaining);
+
+} // namespace th095
+
+#endif
+
+#endif // TH095_MATCH_EXACT

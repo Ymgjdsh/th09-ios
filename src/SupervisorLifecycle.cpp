@@ -1,0 +1,141 @@
+#include "inttypes.hpp"
+#include "GameConfiguration.hpp"
+#include "ReplayScanWorker.hpp"
+#include "SupervisorFlags.hpp"
+#include "SupervisorViewportConfiguration.hpp"
+#include "ZunTimer.hpp"
+#include "diffbuild.hpp"
+
+#include <stddef.h>
+#include <string.h>
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+#include "Main.hpp"
+#endif
+
+namespace th095
+{
+
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+
+// Constructor-only views for the target-owned 0x7BC prefix. Main.hpp keeps the
+// wider runtime layout used by other exact units; this TU isolates member/EH
+// allocation phase just as the target constructor does.
+// The target Supervisor constructor invokes GameConfiguration::Initialize as
+// a member-construction phase before entering its body. Keep that compiler
+// boundary without duplicating the canonical configuration layout.
+struct GameConfigurationConstructionAdapter : GameConfiguration
+{
+    GameConfigurationConstructionAdapter()
+    {
+        Initialize();
+    }
+};
+
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char GameConfigurationConstructionAdapterSizeIsC8[
+    (sizeof(GameConfigurationConstructionAdapter) == 0xc8) ? 1 : -1];
+#endif
+
+// Fieldless adapter preserving the target's two empty member-constructor
+// iterations without introducing a second viewport layout.
+struct SupervisorViewportLifecycle : SupervisorViewportConfiguration
+{
+    SupervisorViewportLifecycle() {}
+};
+
+#if !defined(DIFFBUILD) && !defined(TH095_MATCH_EXACT)
+struct SupervisorLifecycleFlags
+{
+    union
+    {
+        u32 raw;
+        struct
+        {
+            u32 unknown00_05 : 6;
+            u32 dummyMidiTimerEnabled : 1;
+            u32 unknown07_31 : 25;
+        };
+    };
+};
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char SupervisorLifecycleFlagsSizeIs4[
+    (sizeof(SupervisorLifecycleFlags) == 4) ? 1 : -1];
+#endif
+#endif
+
+struct Supervisor
+{
+    u8 unknown000[0x11c];
+    GameConfigurationConstructionAdapter config;
+    SupervisorViewportLifecycle backgroundViewports[2];
+    u8 unknown3c4[0x30];
+    ZunTimer timer;
+    u8 unknown400[0x44];
+    SupervisorFlags flags;
+    u8 unknown448[0x528 - 0x448];
+    u32 screenshotWorkerToken;
+    u8 unknown52c[0x648 - 0x52c];
+    ReplayScanWorker replayWorker;
+    u8 unknown660[0x140];
+    ReplayScanWorker secondaryWorker;
+    u32 backbufferClearColor;
+
+    Supervisor();
+    ~Supervisor();
+};
+
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char SupervisorLifecycleConfigAt11C[
+    (offsetof(Supervisor, config) == 0x11c) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char SupervisorLifecycleViewportsAt1E4[
+    (offsetof(Supervisor, backgroundViewports) == 0x1e4) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char SupervisorLifecycleTimerAt3F4[
+    (offsetof(Supervisor, timer) == 0x3f4) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char SupervisorLifecycleFlagsAt444[
+    (offsetof(Supervisor, flags) == 0x444) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char SupervisorLifecycleScreenshotWorkerTokenAt528[
+    (offsetof(Supervisor, screenshotWorkerToken) == 0x528) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char SupervisorLifecycleWorkerAt648[
+    (offsetof(Supervisor, replayWorker) == 0x648) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char SupervisorLifecycleWorker2At7A0[
+    (offsetof(Supervisor, secondaryWorker) == 0x7a0) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char SupervisorLifecycleSizeIs7BC[
+    (sizeof(Supervisor) == 0x7bc) ? 1 : -1];
+#endif
+
+// The verified target's static initializer at 0x00494040 constructs
+#endif
+// Supervisor::Supervisor on 0x004C4670 and registers the destructor wrapper at
+// 0x00494270, which destroys the same storage.  Keep the production definition
+// beside the exact constructor/destructor source so VC7.1 emits the real owner
+// relationship.  DIFFBUILD deliberately externalizes it, preserving the
+// address-bound canonical comparison units.
+DIFFABLE_STATIC(Supervisor, g_Supervisor);
+
+Supervisor::Supervisor()
+{
+    memset(this, 0, sizeof(*this));
+    flags.dummyMidiTimerEnabled = 1;
+    // No independent TH095-local consumer has established bit 8's role.
+    flags.raw |= 0x100;
+}
+
+Supervisor::~Supervisor()
+{
+}
+
+} // namespace th095

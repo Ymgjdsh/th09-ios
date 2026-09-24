@@ -1,0 +1,118 @@
+#ifndef TH095_PHOTO_GAME_TASK_HPP
+#define TH095_PHOTO_GAME_TASK_HPP
+
+#include "Main.hpp"
+#include "PhotoGameTaskState.hpp"
+#include "ReplayManagerMode.hpp"
+#include "ZunTimer.hpp"
+#if !defined(TH095_MATCH_EXACT) && !defined(DIFFBUILD)
+#include "ReplayManager.hpp"
+#endif
+
+namespace th095
+{
+
+struct Background;
+struct PhotoBulletManagerView;
+struct PhotoEffectManagerView;
+struct PhotoEnemyManagerTaskView;
+struct PhotoFrontManagerView;
+struct PhotoGameUpdateView;
+struct PhotoItemManagerView;
+struct PhotoStageStateView;
+struct ReplayManager;
+struct ResultScreen;
+
+struct PhotoCompletionStateTaskView
+{
+    i32 completionActive;
+    ZunTimer timer;
+};
+
+// Canonical layout of the live photography task. Exact-only source emission
+// stays isolated in PhotoGameTaskExact.inl; consumers share this owner.
+struct PhotoGameTaskView
+{
+    Background *background;                 // +0x000
+    PhotoFrontManagerView *front;            // +0x004
+    PhotoBulletManagerView *bullets;         // +0x008
+    PhotoGameUpdateView *player;             // +0x00c
+    ReplayManager *replay;                   // +0x010
+    PhotoEnemyManagerTaskView *enemies;      // +0x014
+    PhotoStageStateView *photoOverlay;        // +0x018
+    PhotoItemManagerView *items;             // +0x01c
+    ResultScreen *pause;                     // +0x020
+    PhotoEffectManagerView *lasers;          // +0x024
+    ZunTimer stageTimer;                     // +0x028
+    GameConfiguration runtimeConfig;        // +0x034
+    union
+    {
+        u32 flags;                           // +0x0fc
+        struct
+        {
+            u32 captureActive : 1;
+            u32 capturedPhotoActive : 1;
+            u32 gameplayLoadActive : 1;
+            u32 gameplayLoadFailed : 1;
+            u32 resultScreenActive : 1;
+            u32 playerDeathTransitionComplete : 1;
+            u32 photoLimitTransitionComplete : 1;
+            u32 resetFpsSample : 1;
+            u32 unknownFlag8 : 1;
+            u32 photoSoundSuppressed : 1;
+            u32 photoTransitionActive : 1;
+            u32 unknownFlags11_31 : 21;
+        };
+    };
+    i32 bestShotIndex;                       // +0x100
+    PhotoCompletionStateTaskView completion; // +0x104
+    i32 score;                               // +0x114
+    ChainElem *calcChain;                    // +0x118
+    ChainElem *drawChain;                    // +0x11c
+    ReplayManagerMode replayMode;            // +0x120
+
+    PhotoGameTaskView();
+    ~PhotoGameTaskView();
+
+    static PhotoGameTaskView *__fastcall Create(i32 replayMode);
+    void Destroy();
+    static void __fastcall Load(void *argument);
+    static i32 __fastcall OnUpdate(PhotoGameTaskView *task);
+    static i32 __fastcall OnDraw(PhotoGameTaskView *task);
+    i32 InitializeSubsystems();
+    i32 Update();
+    i32 DrawHud();
+};
+
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char PhotoGameTaskSizeIs124[
+    (sizeof(PhotoGameTaskView) == 0x124) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char PhotoGameTaskConfigAt34[
+    (offsetof(PhotoGameTaskView, runtimeConfig) == 0x34) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char PhotoGameTaskFlagsAtFC[
+    (offsetof(PhotoGameTaskView, flags) == PHOTO_GAME_TASK_FLAGS_OFFSET) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char PhotoGameTaskCompletionAt104[
+    (offsetof(PhotoGameTaskView, completion) == 0x104) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char PhotoGameTaskCompletionActiveAt104[
+    (offsetof(PhotoGameTaskView, completion.completionActive) == 0x104) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char PhotoGameTaskCompletionTimerAt108[
+    (offsetof(PhotoGameTaskView, completion.timer) == 0x108) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char PhotoGameTaskChainsAt118[
+    (offsetof(PhotoGameTaskView, calcChain) == 0x118) ? 1 : -1];
+#endif
+
+} // namespace th095
+
+#endif

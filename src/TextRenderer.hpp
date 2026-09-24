@@ -1,0 +1,116 @@
+#ifndef TH095_TEXT_RENDERER_HPP
+#define TH095_TEXT_RENDERER_HPP
+
+#include "PixelFormats.hpp"
+#include "inttypes.hpp"
+
+#include <d3dx8.h>
+#include <stddef.h>
+#include <windows.h>
+
+namespace th095
+{
+
+#if defined(TH095_MATCH_EXACT) || defined(DIFFBUILD)
+#define g_TextFontWidth17OrLess g_TextFont17
+#define g_TextFontWidth18 g_TextFont18
+#define g_TextFontWidth19 g_TextFont19
+#define g_TextFontWidth20OrMore g_TextFont20
+#endif
+
+struct TextRenderFormatInfo
+{
+    D3DFORMAT format;
+    i32 bitCount;
+    u32 alphaMask;
+    u32 redMask;
+    u32 greenMask;
+    u32 blueMask;
+};
+
+struct TextRenderBufferView
+{
+    TextRenderBufferView();
+    ~TextRenderBufferView();
+
+    u8 unknown000[0x100];
+    D3DFORMAT format;
+    i32 width;
+    i32 height;
+    u32 imageSizeInBytes;
+    i32 imageWidthInBytes;
+    HDC hdc;
+#if defined(TH095_MATCH_EXACT) || defined(DIFFBUILD)
+    HGDIOBJ originalBitmap;
+#else
+    HGDIOBJ previousSelectedBitmap;
+#endif
+#if defined(TH095_MATCH_EXACT) || defined(DIFFBUILD)
+    HGDIOBJ bitmap;
+    u8 *buffer;
+#else
+    HGDIOBJ ownedBitmap;
+    u8 *bitmapBits;
+#endif
+
+    bool ReleaseBuffer();
+    bool AllocateBufferWithFallback(i32 width, i32 height,
+                                    D3DFORMAT format);
+    bool TryAllocateBuffer(i32 width, i32 height, D3DFORMAT format);
+    TextRenderFormatInfo *GetFormatInfo(D3DFORMAT format);
+    bool InvertAlpha(i32 rowCount, BOOL unused);
+    bool ApplyAlphaBleed(i32 rowCount);
+};
+
+struct TextHelperView
+{
+    static void CreateTextBuffer();
+    static void ReleaseTextBuffer();
+    static void RenderTextToTextureBold(
+        i32 x, i32 y, i32 width, i32 height, i32 glyphWidth,
+        i32 glyphHeight, COLORREF textColor, COLORREF shadowColor,
+        const char *text, IDirect3DTexture8 *texture);
+};
+
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char TextRenderBufferFormatAt100[
+    (offsetof(TextRenderBufferView, format) == 0x100) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char TextRenderBufferImageSizeAt10C[
+    (offsetof(TextRenderBufferView, imageSizeInBytes) == 0x10c) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char TextRenderBufferHdcAt114[
+    (offsetof(TextRenderBufferView, hdc) == 0x114) ? 1 : -1];
+#endif
+#if defined(TH095_MATCH_EXACT) || defined(DIFFBUILD)
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char TextRenderBufferPreviousBitmapAt118[
+    (offsetof(TextRenderBufferView, originalBitmap) == 0x118) ? 1 : -1];
+#endif
+#else
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char TextRenderBufferPreviousBitmapAt118[
+    (offsetof(TextRenderBufferView, previousSelectedBitmap) == 0x118) ? 1 : -1];
+#endif
+#endif
+#if defined(TH095_MATCH_EXACT) || defined(DIFFBUILD)
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char TextRenderBufferDataAt120[
+    (offsetof(TextRenderBufferView, buffer) == 0x120) ? 1 : -1];
+#endif
+#else
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char TextRenderBufferDataAt120[
+    (offsetof(TextRenderBufferView, bitmapBits) == 0x120) ? 1 : -1];
+#endif
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char TextRenderFormatInfoSizeIs18[
+    (sizeof(TextRenderFormatInfo) == 0x18) ? 1 : -1];
+#endif
+
+} // namespace th095
+
+#endif

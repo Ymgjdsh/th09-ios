@@ -1,0 +1,148 @@
+#pragma once
+
+#include <stddef.h>
+
+namespace th095
+{
+
+class ChainElem;
+
+enum ScreenEffectType
+{
+    SCREEN_EFFECT_FULL_FADE_IN = 0,
+    SCREEN_EFFECT_SHAKE = 1,
+    SCREEN_EFFECT_ARCADE_FADE_OUT = 2,
+    // The target switch table maps value 3 to the arcade pulse callbacks and
+    // value 4 to the full-screen fade-out callbacks.
+    SCREEN_EFFECT_ARCADE_PULSE = 3,
+    SCREEN_EFFECT_FULL_FADE_OUT = 4,
+    SCREEN_EFFECT_FULL_FADE_HOLD = 5,
+    SCREEN_EFFECT_ARCADE_FADE_HOLD = 6,
+    SCREEN_EFFECT_SHAKE_ENVELOPE = 7,
+};
+
+struct ScreenEffectTimer
+{
+    ScreenEffectTimer();
+
+    int previous;
+    float subFrame;
+    int current;
+
+    __forceinline operator int();
+    __forceinline operator float();
+    int Tick();
+    __forceinline void operator++(int);
+    __forceinline void operator=(int value);
+    __forceinline unsigned int operator<(int value);
+    __forceinline unsigned int operator<=(int value);
+    __forceinline unsigned int operator>=(int value);
+};
+
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ScreenEffectTimerSizeIs0C[(sizeof(ScreenEffectTimer) == 0x0c) ? 1 : -1];
+#endif
+
+struct ScreenEffectRect
+{
+    float left;
+    float top;
+    float right;
+    float bottom;
+};
+
+struct ScreenEffect
+{
+    int type;
+    ChainElem *calcChainElement;
+    ChainElem *drawChainElement;
+    int unconsumedDword0C;
+    int overlayAlpha;
+#if defined(TH095_MATCH_EXACT) || defined(DIFFBUILD)
+    int duration;
+    int rawParameter0;
+    int rawParameter1;
+    int rawParameter2;
+#else
+    union
+    {
+        int duration;
+        int shakeEnvelopeAmplitude;
+        int arcadePulseFadeFrames;
+    };
+    union
+    {
+        int rawParameter0;
+        int shakeEnvelopeRampUpFrames;
+        int arcadePulseRepeatCount;
+    };
+    union
+    {
+        int rawParameter1;
+        int shakeEnvelopeHoldFrames;
+        unsigned int arcadePulseColor;
+    };
+    union
+    {
+        int rawParameter2;
+        int shakeEnvelopeRampDownFrames;
+    };
+#endif
+    int fadeReleaseRequested;
+    ScreenEffectTimer timer;
+
+    static void Clear(unsigned int color);
+    static void SetViewport(unsigned int clearColor);
+    static int CalcFadeIn(ScreenEffect *screenEffect);
+    static int CalcFadeOut(ScreenEffect *screenEffect);
+    static int CalcFadeHold(ScreenEffect *screenEffect);
+    static int CalcArcadePulse(ScreenEffect *screenEffect);
+    static int CalcShake(ScreenEffect *screenEffect);
+    static int CalcShakeEnvelope(ScreenEffect *screenEffect);
+    static int InitializeTimer(ScreenEffect *screenEffect);
+    static int DeleteScreenEffect(ScreenEffect *screenEffect);
+    static ScreenEffect *RegisterChain(
+        ScreenEffectType effect, int durationFrames, int primaryParameter,
+        int secondaryParameter, int tertiaryParameter, int drawPriority);
+    static void DrawSquare(ScreenEffectRect *rect, unsigned int color);
+    static int DrawFullFade(ScreenEffect *screenEffect);
+    static int DrawPartialFade(ScreenEffect *screenEffect);
+    static int DrawArcadeFade(ScreenEffect *screenEffect);
+    static int DrawArcadePulse(ScreenEffect *screenEffect);
+};
+
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ScreenEffectSizeIs34[(sizeof(ScreenEffect) == 0x34) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ScreenEffectAlphaAt10[(offsetof(ScreenEffect, overlayAlpha) == 0x10) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ScreenEffectDurationAt14[(offsetof(ScreenEffect, duration) == 0x14) ? 1 : -1];
+#endif
+#if !defined(TH095_MATCH_EXACT) && !defined(DIFFBUILD)
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ScreenEffectShakeEnvelopeAt14[
+    (offsetof(ScreenEffect, shakeEnvelopeAmplitude) == 0x14 &&
+     offsetof(ScreenEffect, shakeEnvelopeRampUpFrames) == 0x18 &&
+     offsetof(ScreenEffect, shakeEnvelopeHoldFrames) == 0x1c &&
+     offsetof(ScreenEffect, shakeEnvelopeRampDownFrames) == 0x20) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ScreenEffectArcadePulseAt14[
+    (offsetof(ScreenEffect, arcadePulseFadeFrames) == 0x14 &&
+     offsetof(ScreenEffect, arcadePulseRepeatCount) == 0x18 &&
+     offsetof(ScreenEffect, arcadePulseColor) == 0x1c) ? 1 : -1];
+#endif
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ScreenEffectRawAt18[(offsetof(ScreenEffect, rawParameter0) == 0x18) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ScreenEffectReleaseAt24[(offsetof(ScreenEffect, fadeReleaseRequested) == 0x24) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char ScreenEffectTimerAt28[(offsetof(ScreenEffect, timer) == 0x28) ? 1 : -1];
+#endif
+
+} // namespace th095

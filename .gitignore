@@ -1,0 +1,11 @@
+build*/
+*.log
+ios/resources/
+.analysis/
+ghidra-project/
+*.dat
+*.exe
+*.ipa
+*.mobileprovision
+*.p12
+.DS_Store

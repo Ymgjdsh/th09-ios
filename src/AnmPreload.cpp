@@ -1,0 +1,780 @@
+#include "AnmManager.hpp"
+
+#include <stdlib.h>
+
+namespace th095
+{
+
+#ifdef TH095_MATCH_EXACT
+#define TH095_REPLAY_WORKER_EXIT_SIGNAL(worker) ((worker).stopRequested)
+#else
+#define TH095_REPLAY_WORKER_EXIT_SIGNAL(worker) ((worker).exitSignal)
+#endif
+
+struct AnmRawEntryView
+{
+    i32 numSprites;
+    i32 numScripts;
+    u32 textureIdx;
+    i32 width;
+    i32 height;
+    u32 format;
+    u32 colorKey;
+    u32 nameOffset;
+    u32 spriteIdxOffset;
+    u32 mipmapNameOffset;
+    u32 version;
+    u32 priority;
+    u32 textureOffset;
+    u8 hasData;
+    u8 padding035[3];
+    u32 nextOffset;
+    u32 serializedReserved03c;
+};
+
+struct AnmRawSpriteView
+{
+    u32 id;
+    f32 x;
+    f32 y;
+    f32 width;
+    f32 height;
+};
+
+struct AnmTextureHeaderView
+{
+    char magic[4];
+    u16 serializedReserved004;
+    i16 format;
+    i16 width;
+    i16 height;
+    u16 serializedReserved00c;
+    u16 serializedReserved00e;
+};
+
+#ifdef TH095_MATCH_EXACT
+// Exact units predate production canonicalization of this TU onto AnmManager.
+// Preserve their target-facing receiver identity and the target-proven +0x2c
+// preload-slot layout while production uses the real shared AnmManager class.
+struct AnmPreloadSlotView
+{
+    AnmLoaded loaded;
+    i32 releasePending;
+    u8 path[0x100];
+};
+
+struct AnmManagerPreloadView
+{
+    u8 unknown000[0x2c];
+    AnmPreloadSlotView slots[13];
+
+    AnmLoaded *PostloadAnmEntry(AnmLoaded *anm);
+    i32 LoadTextureData(AnmLoaded *anm, i32 entryNumber, i32 spriteCount,
+                        i32 scriptCount, AnmRawEntryView *rawEntry);
+    i32 CreateTextureFromFile(AnmTextureEntryView *entry, i32 format,
+                              i32 colorKey);
+    i32 CreateTextureFromAnm(IDirect3DTexture8 **outTexture,
+                             void *textureData, i32 format);
+    i32 CreateEmptyTexture(IDirect3DTexture8 **outTexture, i32 width,
+                           i32 height, i32 format);
+    void ApplyTextureAlphaBleed(AnmTextureEntryView *entry);
+    AnmLoaded *LoadAnm(i32 anmIdx, const char *filename);
+    AnmLoaded *ReadAnmEntries(i32 anmIdx, const char *filename);
+    AnmLoaded *PreloadAnm(i32 anmIdx, const char *filename);
+    i32 LoadExternalTextureData(AnmLoaded *anm, i32 entryNumber,
+                                i32 *sprites, i32 *scripts,
+                                AnmRawEntryView *rawEntry);
+    void ReleaseAnm(i32 anmIdx);
+    void ReleaseAnmEntry(AnmTextureEntryView *entry);
+    void MarkVmsForDeletion(AnmLoaded *anm);
+    ZunResult ServicePreloadedAnims();
+};
+
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char AnmPreloadSlotViewSizeIs120[
+    (sizeof(AnmPreloadSlotView) == 0x120) ? 1 : -1];
+#endif
+#define TH095_ANM_PRELOAD_RECEIVER AnmManagerPreloadView
+#else
+#define TH095_ANM_PRELOAD_RECEIVER AnmManager
+#endif
+
+class AnmPreloadMemoryView
+{
+  public:
+    void *Alloc(i32 size)
+    {
+        return malloc(size);
+    }
+
+    void Free(void *ptr)
+    {
+        free(ptr);
+    }
+};
+
+extern AnmPreloadMemoryView g_AnmPreloadMemory;
+#if defined(TH095_MODERN_PORT) && !defined(TH095_MATCH_EXACT) && !defined(DIFFBUILD)
+AnmPreloadMemoryView g_AnmPreloadMemory;
+#endif
+#if !defined(DIFFBUILD) && !defined(TH095_MATCH_EXACT)
+// Canonical target .rdata tables at 0x00496F10 and 0x00496F28.  They map the
+// six serialized ANM texture formats to Direct3D8 formats and byte strides.
+D3DFORMAT g_TextureFormatD3D8Mapping[6] = {
+    D3DFMT_UNKNOWN, D3DFMT_A8R8G8B8, D3DFMT_A1R5G5B5,
+    D3DFMT_R5G6B5, D3DFMT_R8G8B8, D3DFMT_A4R4G4B4};
+u32 g_TextureFormatBytesPerPixel[6] = {4, 4, 2, 2, 3, 2};
+#else
+extern D3DFORMAT g_TextureFormatD3D8Mapping[6];
+extern u32 g_TextureFormatBytesPerPixel[6];
+#endif
+i32 __fastcall GetAnmFormat(i32 format);
+
+#if !defined(DIFFBUILD) && !defined(TH095_MATCH_EXACT)
+// Runnable builds use Supervisor critical section 6 as the startup-worker
+// serialization domain.  A Wine/GDB trace caught StartupThread and the main
+// thread entering PostloadAnmEntry for the same ascii.anm slot and entry: the
+// synchronous LoadAnm loop publishes postloadEntryNumber, which is also
+// the main thread's asynchronous ServicePreloadedAnims work signal.  The two
+// consumers then created and alpha-processed the same texture concurrently;
+// one reached SetPriority after the other had replaced/released its texture.
+//
+// The original function bodies remain untouched in DIFFBUILD and
+// TH095_MATCH_EXACT.  Production reuses critical section 6 because it already
+// owns replay/startup-worker launch and close.  Only postload consumption is
+// serialized: PreloadAnm's worker wait is deliberately outside this lock, or
+// it would deadlock while waiting for the main thread to service its entry.
+static __forceinline void EnterAnmPostloadCriticalSection()
+{
+    g_Supervisor.EnterCriticalSectionWrapper(6);
+}
+
+static __forceinline void LeaveAnmPostloadCriticalSection()
+{
+    g_Supervisor.LeaveCriticalSectionWrapper(6);
+}
+#endif
+
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char AnmRawEntryViewNextAt38[(offsetof(AnmRawEntryView, nextOffset) == 0x38) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char AnmRawEntryViewSizeIs40[(sizeof(AnmRawEntryView) == 0x40) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char AnmTextureHeaderViewSizeIs10[(sizeof(AnmTextureHeaderView) == 0x10) ? 1 : -1];
+#endif
+
+// FUNCTION: TH095 0x00442E10.
+i32 TH095_ANM_PRELOAD_RECEIVER::CreateTextureFromFile(
+    AnmTextureEntryView *entry, i32 format, i32 colorKey)
+{
+    format = GetAnmFormat(format);
+    if (D3DXCreateTextureFromFileInMemoryEx(
+            g_Supervisor.d3dDevice, entry->rawData, entry->size, 0, 0, 0, 0,
+            g_TextureFormatD3D8Mapping[format], D3DPOOL_MANAGED,
+            D3DX_FILTER_LINEAR, static_cast<DWORD>(-1), colorKey, NULL, NULL,
+            &entry->texture) != D3D_OK)
+    {
+        return ZUN_ERROR;
+    }
+
+    this->ApplyTextureAlphaBleed(entry);
+#if defined(TH095_MATCH_EXACT)
+    entry->unknown00c = g_TextureFormatBytesPerPixel[format];
+#else
+    entry->bytesPerPixel = g_TextureFormatBytesPerPixel[format];
+#endif
+    return ZUN_SUCCESS;
+}
+
+// FUNCTION: TH095 0x00442E90.
+i32 TH095_ANM_PRELOAD_RECEIVER::CreateTextureFromAnm(
+    IDirect3DTexture8 **outTexture, void *textureData, i32 format)
+{
+    IDirect3DSurface8 *textureSurfaceLevel;
+    RECT sourceRect;
+    AnmTextureHeaderView *header;
+
+    textureSurfaceLevel = NULL;
+    format = GetAnmFormat(format);
+    header = reinterpret_cast<AnmTextureHeaderView *>(textureData);
+    sourceRect.left = 0;
+    sourceRect.top = 0;
+    sourceRect.right = header->width;
+    sourceRect.bottom = header->height;
+
+    if (D3DXCreateTexture(
+            g_Supervisor.d3dDevice, header->width, header->height, 1, 0,
+            g_TextureFormatD3D8Mapping[format], D3DPOOL_MANAGED,
+            outTexture) != D3D_OK)
+    {
+        goto error;
+    }
+
+    (*outTexture)->GetSurfaceLevel(0, &textureSurfaceLevel);
+    D3DXLoadSurfaceFromMemory(
+        textureSurfaceLevel, NULL, NULL,
+        reinterpret_cast<u8 *>(textureData) + sizeof(AnmTextureHeaderView),
+        g_TextureFormatD3D8Mapping[header->format],
+        g_TextureFormatBytesPerPixel[header->format] * header->width, NULL,
+        &sourceRect, D3DX_FILTER_NONE, 0);
+#if defined(TH095_MATCH_EXACT)
+    reinterpret_cast<AnmTextureEntryView *>(outTexture)->unknown00c =
+        g_TextureFormatBytesPerPixel[format];
+#else
+    reinterpret_cast<AnmTextureEntryView *>(outTexture)->bytesPerPixel =
+        g_TextureFormatBytesPerPixel[format];
+#endif
+
+    if (textureSurfaceLevel != NULL)
+    {
+        textureSurfaceLevel->Release();
+        textureSurfaceLevel = NULL;
+    }
+    return ZUN_SUCCESS;
+
+error:
+    if (textureSurfaceLevel != NULL)
+    {
+        textureSurfaceLevel->Release();
+        textureSurfaceLevel = NULL;
+    }
+    return ZUN_ERROR;
+}
+
+// FUNCTION: TH095 0x00442FC0.
+i32 TH095_ANM_PRELOAD_RECEIVER::CreateEmptyTexture(
+    IDirect3DTexture8 **outTexture, i32 width, i32 height, i32 format)
+{
+    D3DXCreateTexture(
+        g_Supervisor.d3dDevice, width, height, 1, 0,
+        g_TextureFormatD3D8Mapping[format], D3DPOOL_MANAGED, outTexture);
+#if defined(TH095_MATCH_EXACT)
+    reinterpret_cast<AnmTextureEntryView *>(outTexture)->unknown00c =
+        g_TextureFormatBytesPerPixel[format];
+#else
+    reinterpret_cast<AnmTextureEntryView *>(outTexture)->bytesPerPixel =
+        g_TextureFormatBytesPerPixel[format];
+#endif
+    return ZUN_SUCCESS;
+}
+
+// FUNCTION: TH095 0x00443010.
+AnmLoaded *TH095_ANM_PRELOAD_RECEIVER::LoadAnm(i32 anmIdx, const char *filename)
+{
+    utils::DebugPrint("::loadAnim : %s\n", filename);
+    AnmLoaded *anm = this->ReadAnmEntries(anmIdx, filename);
+#if !defined(DIFFBUILD) && !defined(TH095_MATCH_EXACT)
+    EnterAnmPostloadCriticalSection();
+#endif
+    if (anm != NULL)
+    {
+        anm->postloadEntryNumber = 1;
+#if defined(DIFFBUILD) || defined(TH095_MATCH_EXACT)
+        while (anm->postloadEntryNumber != 0)
+#else
+        while (anm != NULL && anm->postloadEntryNumber != 0)
+#endif
+        {
+            anm = this->PostloadAnmEntry(anm);
+        }
+    }
+#if !defined(DIFFBUILD) && !defined(TH095_MATCH_EXACT)
+    LeaveAnmPostloadCriticalSection();
+#endif
+    return anm;
+}
+
+// FUNCTION: TH095 0x00443070.
+AnmLoaded *TH095_ANM_PRELOAD_RECEIVER::ReadAnmEntries(
+    i32 anmIdx, const char *filename)
+{
+    struct ReadAnmState
+    {
+        i32 stopRequested;
+        AnmRawEntryView *currentEntry;
+        i32 totalScripts;
+        i32 result;
+        AnmRawEntryView *entry;
+        AnmLoaded *anm;
+        i32 totalEntries;
+        i32 totalSprites;
+        i32 currentEntryNumber;
+    } state;
+
+    utils::DebugPrint("::preloadAnim : %s\n", filename);
+    if (anmIdx >= 13)
+    {
+        g_GameErrorContext.Fatal(
+            "\x83\x65\x83\x4e\x83\x58\x83\x60\x83\x83\x8a\x69\x94\x5b"
+            "\x90\xe6\x82\xaa\x91\xab\x82\xe8\x82\xdc\x82\xb9\x82\xf1"
+            "\r\n");
+        return NULL;
+    }
+
+    if (this->slots[anmIdx].loaded.rawData != NULL)
+    {
+        utils::DebugPrint(":: old delete\n");
+        this->slots[anmIdx].releasePending = 1;
+        while (this->slots[anmIdx].releasePending != 0 &&
+               (state.stopRequested =
+                    g_Supervisor.replayScanWorker.exitSignal) == 0)
+        {
+            Sleep(1);
+        }
+    }
+
+    state.entry = reinterpret_cast<AnmRawEntryView *>(
+        FileSystem::OpenFile(const_cast<char *>(filename), NULL, FALSE));
+    state.totalEntries = 0;
+    state.totalScripts = 0;
+    state.totalSprites = 0;
+    state.currentEntryNumber = 0;
+    state.anm = &this->slots[anmIdx].loaded;
+    if (state.entry == NULL)
+        return NULL;
+
+    state.anm->anmIdx = anmIdx;
+    state.anm->rawData = state.entry;
+#if defined(TH095_MATCH_EXACT)
+    strcpy(reinterpret_cast<char *>(state.anm) + 0x20, filename);
+#else
+    strcpy(reinterpret_cast<char *>(this->slots[anmIdx].path), filename);
+#endif
+    state.currentEntry = state.entry;
+    while (true)
+    {
+        state.totalEntries++;
+        state.totalScripts += state.currentEntry->numScripts;
+        state.totalSprites += state.currentEntry->numSprites;
+        if (state.currentEntry->nextOffset == 0)
+            break;
+        state.currentEntry = reinterpret_cast<AnmRawEntryView *>(
+            reinterpret_cast<u8 *>(state.currentEntry) +
+            state.currentEntry->nextOffset);
+    }
+
+    state.anm->totalEntries = state.totalEntries;
+    state.anm->textures = reinterpret_cast<AnmTextureEntryView *>(
+        malloc(state.totalEntries * sizeof(AnmTextureEntryView)));
+    memset(state.anm->textures, 0,
+           state.totalEntries * sizeof(AnmTextureEntryView));
+    state.anm->sprites = reinterpret_cast<AnmLoadedSprite *>(
+        g_AnmPreloadMemory.Alloc(
+            state.totalSprites * sizeof(AnmLoadedSprite)));
+    state.anm->scripts = reinterpret_cast<AnmRawInstr **>(
+        g_AnmPreloadMemory.Alloc(
+            state.totalScripts * sizeof(AnmRawInstr *)));
+
+    state.currentEntry = state.entry;
+    state.totalEntries = 0;
+    state.totalSprites = 0;
+    state.totalScripts = 0;
+    while (true)
+    {
+        state.result = this->LoadExternalTextureData(
+            state.anm, state.currentEntryNumber, &state.totalSprites,
+            &state.totalScripts, state.currentEntry);
+        if (state.result < ZUN_SUCCESS)
+            return NULL;
+
+        state.currentEntryNumber++;
+        if (state.currentEntry->nextOffset == 0)
+            break;
+        state.currentEntry = reinterpret_cast<AnmRawEntryView *>(
+            reinterpret_cast<u8 *>(state.currentEntry) +
+            state.currentEntry->nextOffset);
+    }
+    return state.anm;
+}
+
+// FUNCTION: TH095 0x004432E0.
+AnmLoaded *TH095_ANM_PRELOAD_RECEIVER::PreloadAnm(
+    i32 anmIdx, const char *filename)
+{
+    struct PreloadState
+    {
+        i32 finalStopRequested;
+        i32 loopStopRequested;
+        AnmLoaded *anm;
+    } state;
+
+    if (this->slots[anmIdx].loaded.rawData != NULL)
+    {
+        utils::DebugPrint("::preloadAnim already : %s\n", filename);
+        return &this->slots[anmIdx].loaded;
+    }
+
+    state.anm = this->ReadAnmEntries(anmIdx, filename);
+    if (state.anm == NULL)
+        return NULL;
+
+    state.anm->postloadEntryNumber = 1;
+    while (state.anm->postloadEntryNumber != 0 &&
+           (state.loopStopRequested =
+                g_Supervisor.replayScanWorker.exitSignal) == 0)
+    {
+        Sleep(1);
+    }
+    utils::DebugPrint("::preloadAnimEnd : %s\n", filename);
+    state.finalStopRequested = g_Supervisor.replayScanWorker.exitSignal;
+    return state.finalStopRequested ? NULL : state.anm;
+}
+
+// FUNCTION: TH095 0x004433A0.
+i32 TH095_ANM_PRELOAD_RECEIVER::LoadExternalTextureData(
+    AnmLoaded *anm, i32 entryNumber, i32 *, i32 *,
+    AnmRawEntryView *rawEntry)
+{
+    struct ExternalTextureState
+    {
+        u8 *fileData;
+        i32 fileSize;
+        const char *path;
+        AnmRawEntryView *startOfEntry;
+        i32 result;
+    } state;
+
+    state.result = 0;
+    if (rawEntry == NULL)
+    {
+        g_GameErrorContext.Fatal(
+            "\x83\x41\x83\x6a\x83\x81\x82\xaa\x93\xc7\x82\xdd\x8d\x9e"
+            "\x82\xdf\x82\xdc\x82\xb9\x82\xf1\x81\x42\x83\x66\x81\x5b"
+            "\x83\x5e\x82\xaa\x8e\xb8\x82\xed\x82\xea\x82\xc4\x82\xe9"
+            "\x82\xa9\x89\xf3\x82\xea\x82\xc4\x82\xa2\x82\xdc\x82\xb7"
+            "\r\n");
+        return ZUN_ERROR;
+    }
+
+    state.startOfEntry = rawEntry;
+    if (state.startOfEntry->version != 4)
+    {
+        g_GameErrorContext.Fatal(
+            "\x83\x41\x83\x6a\x83\x81\x82\xcc\x83\x6f\x81\x5b\x83\x57"
+            "\x83\x87\x83\x93\x82\xaa\x88\xe1\x82\xa2\x82\xdc\x82\xb7"
+            "\r\n");
+        return ZUN_ERROR;
+    }
+
+    if (!state.startOfEntry->hasData)
+    {
+        state.path = reinterpret_cast<const char *>(
+            reinterpret_cast<u8 *>(state.startOfEntry) +
+            state.startOfEntry->nameOffset);
+        if (state.path[0] != '@')
+        {
+            state.fileData = FileSystem::OpenFile(
+                const_cast<char *>(state.path), &state.fileSize, TRUE);
+            if (state.fileData == NULL)
+            {
+                g_GameErrorContext.Fatal(
+                    "\x83\x65\x83\x4e\x83\x58\x83\x60\x83\x83 %s "
+                    "\x82\xaa\x93\xc7\x82\xdd\x8d\x9e\x82\xdf\x82\xdc"
+                    "\x82\xb9\x82\xf1\x81\x42\x83\x66\x81\x5b\x83\x5e"
+                    "\x82\xaa\x8e\xb8\x82\xed\x82\xea\x82\xc4\x82\xe9"
+                    "\x82\xa9\x89\xf3\x82\xea\x82\xc4\x82\xa2\x82\xdc"
+                    "\x82\xb7\r\n",
+                    state.path);
+                return ZUN_ERROR;
+            }
+            reinterpret_cast<AnmTextureEntryView *>(anm->textures)[entryNumber].size =
+                state.fileSize;
+            reinterpret_cast<AnmTextureEntryView *>(anm->textures)[entryNumber].rawData =
+                state.fileData;
+        }
+    }
+
+    return state.result + 1;
+}
+
+// FUNCTION: TH095 0x004435A0.
+i32 TH095_ANM_PRELOAD_RECEIVER::LoadTextureData(
+    AnmLoaded *anm, i32 entryNumber, i32 currentSpriteNumber,
+    i32 currentScriptNumber, AnmRawEntryView *rawEntry)
+{
+    struct LoadTextureState
+    {
+        AnmLoadedSprite loadedSprite;
+        u32 loadedSpriteAlignment;
+        u32 *currentOffset;
+        i32 i;
+        AnmRawSpriteView *rawSprite;
+        const char *path;
+        D3DSURFACE_DESC surfaceDesc;
+        AnmRawEntryView *startOfEntry;
+        i32 result;
+    } state;
+
+    state.result = 0;
+
+    if (rawEntry == NULL)
+    {
+        g_GameErrorContext.Fatal(
+            "\x83\x41\x83\x6a\x83\x81\x82\xaa\x93\xc7\x82\xdd\x8d\x9e"
+            "\x82\xdf\x82\xdc\x82\xb9\x82\xf1\x81\x42\x83\x66\x81\x5b"
+            "\x83\x5e\x82\xaa\x8e\xb8\x82\xed\x82\xea\x82\xc4\x82\xe9"
+            "\x82\xa9\x89\xf3\x82\xea\x82\xc4\x82\xa2\x82\xdc\x82\xb7"
+            "\r\n");
+        return ZUN_ERROR;
+    }
+
+    state.startOfEntry = rawEntry;
+    if (state.startOfEntry->version != 4)
+    {
+        g_GameErrorContext.Fatal(
+            "\x83\x41\x83\x6a\x83\x81\x82\xcc\x83\x6f\x81\x5b\x83\x57"
+            "\x83\x87\x83\x93\x82\xaa\x88\xe1\x82\xa2\x82\xdc\x82\xb7"
+            "\r\n");
+        return ZUN_ERROR;
+    }
+
+    if (!state.startOfEntry->hasData)
+    {
+        state.path = reinterpret_cast<const char *>(
+            reinterpret_cast<u8 *>(state.startOfEntry) + state.startOfEntry->nameOffset);
+
+        if (state.path[0] == '@')
+        {
+            this->CreateEmptyTexture(
+                &reinterpret_cast<AnmTextureEntryView *>(anm->textures)[entryNumber].texture,
+                state.startOfEntry->width, state.startOfEntry->height,
+                state.startOfEntry->format);
+        }
+        else if (this->CreateTextureFromFile(
+                     &reinterpret_cast<AnmTextureEntryView *>(anm->textures)[entryNumber],
+                     state.startOfEntry->format,
+                     state.startOfEntry->colorKey) != ZUN_SUCCESS)
+        {
+            g_GameErrorContext.Fatal(
+                "\x83\x65\x83\x4e\x83\x58\x83\x60\x83\x83 %s \x82\xaa"
+                "\x8d\xec\x90\xac\x82\xc5\x82\xab\x82\xdc\x82\xb9\x82\xf1"
+                "\x81\x42\x83\x66\x81\x5b\x83\x5e\x82\xaa\x8e\xb8\x82\xed"
+                "\x82\xea\x82\xc4\x82\xe9\x82\xa9\x89\xf3\x82\xea\x82\xc4"
+                "\x82\xa2\x82\xdc\x82\xb7\r\n",
+                state.path);
+            return ZUN_ERROR;
+        }
+    }
+    else if (this->CreateTextureFromAnm(
+                 &reinterpret_cast<AnmTextureEntryView *>(anm->textures)[entryNumber].texture,
+                 reinterpret_cast<u8 *>(state.startOfEntry) +
+                     state.startOfEntry->textureOffset,
+                 state.startOfEntry->format) != ZUN_SUCCESS)
+    {
+        g_GameErrorContext.Fatal(
+            "\x83\x65\x83\x4e\x83\x58\x83\x60\x83\x83\x82\xaa\x93\xc7"
+            "\x82\xdd\x8d\x9e\x82\xdf\x82\xdc\x82\xb9\x82\xf1\x81\x42"
+            "\x83\x66\x81\x5b\x83\x5e\x82\xaa\x8e\xb8\x82\xed\x82\xea"
+            "\x82\xc4\x82\xe9\x82\xa9\x89\xf3\x82\xea\x82\xc4\x82\xa2"
+            "\x82\xdc\x82\xb7\r\n");
+        return ZUN_ERROR;
+    }
+
+    reinterpret_cast<AnmTextureEntryView *>(anm->textures)[entryNumber].texture->SetPriority(
+        state.startOfEntry->priority);
+    reinterpret_cast<AnmTextureEntryView *>(anm->textures)[entryNumber].texture->PreLoad();
+    reinterpret_cast<AnmTextureEntryView *>(anm->textures)[entryNumber].texture->GetLevelDesc(
+        0, &state.surfaceDesc);
+
+    state.currentOffset = reinterpret_cast<u32 *>(
+        reinterpret_cast<u8 *>(state.startOfEntry) + sizeof(AnmRawEntryView));
+    for (state.i = 0; state.i < state.startOfEntry->numSprites;
+         state.i++, state.currentOffset++)
+    {
+        state.rawSprite = reinterpret_cast<AnmRawSpriteView *>(
+            reinterpret_cast<u8 *>(state.startOfEntry) + *state.currentOffset);
+
+        state.loadedSprite.anmIdx = anm->anmIdx;
+        state.loadedSprite.texture =
+            reinterpret_cast<AnmTextureEntryView *>(anm->textures)[entryNumber].texture;
+        state.loadedSprite.scaleFactor.x =
+            state.surfaceDesc.Width / (f32)state.startOfEntry->width;
+        state.loadedSprite.scaleFactor.y =
+            state.surfaceDesc.Height / (f32)state.startOfEntry->height;
+        state.loadedSprite.startPixelInclusive.x =
+            state.rawSprite->x * state.loadedSprite.scaleFactor.x;
+        state.loadedSprite.startPixelInclusive.y =
+            state.rawSprite->y * state.loadedSprite.scaleFactor.y;
+        state.loadedSprite.endPixelInclusive.x =
+            (state.rawSprite->x + state.rawSprite->width) *
+            state.loadedSprite.scaleFactor.x;
+        state.loadedSprite.endPixelInclusive.y =
+            (state.rawSprite->y + state.rawSprite->height) *
+            state.loadedSprite.scaleFactor.y;
+        state.loadedSprite.width = state.surfaceDesc.Width;
+        state.loadedSprite.height = state.surfaceDesc.Height;
+
+        anm->LoadSprite(currentSpriteNumber, &state.loadedSprite);
+        currentSpriteNumber++;
+    }
+
+    for (state.i = 0; state.i < state.startOfEntry->numScripts;
+         state.i++, state.currentOffset += 2)
+    {
+        anm->scripts[currentScriptNumber] = reinterpret_cast<AnmRawInstr *>(
+            reinterpret_cast<u8 *>(state.startOfEntry) + state.currentOffset[1]);
+        currentScriptNumber++;
+    }
+
+    return state.result + 1;
+}
+
+// FUNCTION: TH095 0x00443480.
+AnmLoaded *TH095_ANM_PRELOAD_RECEIVER::PostloadAnmEntry(AnmLoaded *anm)
+{
+    struct PostloadState
+    {
+        AnmRawEntryView *rawEntry;
+        i32 currentNumScripts;
+        i32 result;
+        AnmRawEntryView *rawData;
+        i32 entryLoadNumber;
+        i32 currentNumSprites;
+        i32 currentEntryNumber;
+    } state;
+
+    utils::DebugPrint("::postloadAnim : %d, %d\n", anm->anmIdx,
+                      anm->postloadEntryNumber);
+
+    state.rawData = reinterpret_cast<AnmRawEntryView *>(anm->rawData);
+    state.entryLoadNumber = 0;
+    state.currentNumScripts = 0;
+    state.currentNumSprites = 0;
+    state.currentEntryNumber = 0;
+    anm->rawData = state.rawData;
+    state.rawEntry = state.rawData;
+
+    while (true)
+    {
+        if (state.entryLoadNumber == anm->postloadEntryNumber - 1 &&
+            (state.result = this->LoadTextureData(
+                 anm, state.currentEntryNumber, state.currentNumSprites,
+                 state.currentNumScripts, state.rawEntry)) < 0)
+        {
+            anm->postloadEntryNumber = 0;
+            return NULL;
+        }
+
+        state.currentNumSprites += state.rawEntry->numSprites;
+        state.currentNumScripts += state.rawEntry->numScripts;
+        state.currentEntryNumber++;
+        if (state.rawEntry->nextOffset == 0)
+            break;
+
+        state.rawEntry = reinterpret_cast<AnmRawEntryView *>(
+            reinterpret_cast<u8 *>(state.rawEntry) + state.rawEntry->nextOffset);
+        state.entryLoadNumber++;
+        if (state.entryLoadNumber == anm->postloadEntryNumber)
+        {
+            anm->postloadEntryNumber++;
+            return anm;
+        }
+    }
+
+    anm->postloadEntryNumber = 0;
+    return anm;
+}
+
+// FUNCTION: TH095 0x004438E0.
+ZunResult TH095_ANM_PRELOAD_RECEIVER::ServicePreloadedAnims()
+{
+    u32 i;
+
+#if !defined(DIFFBUILD) && !defined(TH095_MATCH_EXACT)
+    EnterAnmPostloadCriticalSection();
+#endif
+    for (i = 0; i < 13; i++)
+    {
+        if (this->slots[i].releasePending != 0)
+        {
+            this->ReleaseAnm(i);
+            this->slots[i].releasePending = 0;
+        }
+        else if (this->slots[i].loaded.postloadEntryNumber != 0 &&
+                 this->PostloadAnmEntry(&this->slots[i].loaded) == NULL)
+        {
+#if !defined(DIFFBUILD) && !defined(TH095_MATCH_EXACT)
+            LeaveAnmPostloadCriticalSection();
+#endif
+            return ZUN_ERROR;
+        }
+    }
+
+#if !defined(DIFFBUILD) && !defined(TH095_MATCH_EXACT)
+    LeaveAnmPostloadCriticalSection();
+#endif
+    return ZUN_SUCCESS;
+}
+
+// FUNCTION: TH095 0x00443980.
+void TH095_ANM_PRELOAD_RECEIVER::ReleaseAnm(i32 anmIdx)
+{
+    i32 i;
+
+    if (anmIdx < 0 || anmIdx >= sizeof(this->slots) / sizeof(this->slots[0]))
+        return;
+
+    if (this->slots[anmIdx].loaded.rawData != NULL)
+    {
+        this->MarkVmsForDeletion(&this->slots[anmIdx].loaded);
+        for (i = 0; i < this->slots[anmIdx].loaded.totalEntries; i++)
+        {
+            this->ReleaseAnmEntry(
+                &reinterpret_cast<AnmTextureEntryView *>(
+                    this->slots[anmIdx].loaded.textures)[i]);
+        }
+
+        g_AnmPreloadMemory.Free(this->slots[anmIdx].loaded.textures);
+        g_AnmPreloadMemory.Free(this->slots[anmIdx].loaded.sprites);
+        g_AnmPreloadMemory.Free(this->slots[anmIdx].loaded.scripts);
+        g_AnmPreloadMemory.Free(this->slots[anmIdx].loaded.rawData);
+        memset(&this->slots[anmIdx], 0, sizeof(AnmPreloadSlot));
+    }
+}
+
+// FUNCTION: TH095 0x00443AC0.
+void TH095_ANM_PRELOAD_RECEIVER::ReleaseAnmEntry(AnmTextureEntryView *entry)
+{
+    if (entry->texture != NULL)
+    {
+        entry->texture->Release();
+        entry->texture = NULL;
+    }
+    if (entry->rawData != NULL)
+    {
+        g_AnmPreloadMemory.Free(entry->rawData);
+    }
+}
+
+// FUNCTION: TH095 0x00443B10.
+void AnmLoaded::LoadSprite(i32 spriteIdx, AnmLoadedSprite *loadedSprite)
+{
+    this->sprites[spriteIdx] = *loadedSprite;
+
+    this->sprites[spriteIdx].uvStart.x =
+        this->sprites[spriteIdx].startPixelInclusive.x /
+        (this->sprites[spriteIdx].width);
+    this->sprites[spriteIdx].uvEnd.x =
+        this->sprites[spriteIdx].endPixelInclusive.x /
+        (this->sprites[spriteIdx].width);
+    this->sprites[spriteIdx].uvStart.y =
+        this->sprites[spriteIdx].startPixelInclusive.y /
+        (this->sprites[spriteIdx].height);
+    this->sprites[spriteIdx].uvEnd.y =
+        this->sprites[spriteIdx].endPixelInclusive.y /
+        (this->sprites[spriteIdx].height);
+    this->sprites[spriteIdx].widthPx =
+        (this->sprites[spriteIdx].endPixelInclusive.x -
+         this->sprites[spriteIdx].startPixelInclusive.x) /
+        loadedSprite->scaleFactor.x;
+    this->sprites[spriteIdx].heightPx =
+        (this->sprites[spriteIdx].endPixelInclusive.y -
+         this->sprites[spriteIdx].startPixelInclusive.y) /
+        loadedSprite->scaleFactor.y;
+}
+
+#undef TH095_REPLAY_WORKER_EXIT_SIGNAL
+
+} // namespace th095

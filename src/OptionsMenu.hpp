@@ -1,0 +1,325 @@
+#ifdef TH095_MATCH_EXACT
+#include "OptionsMenuExact.hpp"
+#else
+#ifndef TH095_OPTIONS_MENU_HPP
+#define TH095_OPTIONS_MENU_HPP
+
+#include "ReplayBrowser.hpp"
+
+namespace th095
+{
+
+#ifndef DIFFBUILD
+typedef i32 OptionsMenuState;
+enum OptionsMenuStateValue
+{
+    OPTIONS_MENU_STATE_INITIALIZE = 0,
+    OPTIONS_MENU_STATE_ACTIVE = 1,
+};
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char OptionsMenuStateSizeIs4[
+    (sizeof(OptionsMenuState) == sizeof(i32)) ? 1 : -1];
+#endif
+#endif
+
+typedef i32 OptionsMenuItem;
+enum OptionsMenuItemValue
+{
+    OPTIONS_MENU_ITEM_BUTTON02_BINDING = 0,
+    OPTIONS_MENU_ITEM_BUTTON00_BINDING = 1,
+    OPTIONS_MENU_ITEM_BUTTON06_BINDING = 2,
+    OPTIONS_MENU_ITEM_WINDOW_MODE = 3,
+    OPTIONS_MENU_ITEM_BGM_VOLUME = 4,
+    OPTIONS_MENU_ITEM_SFX_VOLUME = 5,
+    OPTIONS_MENU_ITEM_EXIT = 6,
+    OPTIONS_MENU_ITEM_COUNT = 7,
+};
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char OptionsMenuItemSizeIs4[
+    (sizeof(OptionsMenuItem) == sizeof(i32)) ? 1 : -1];
+#endif
+
+struct OptionsControllerBinding
+{
+    i16 button00;
+    i16 button02;
+    i16 unknown04;
+    i16 button06;
+    u8 unknown08[0x0a];
+};
+
+struct OptionsGameConfigView
+{
+    OptionsControllerBinding controllerBinding;
+    u8 unknown012[0x9d];
+    u8 windowed;
+    u8 unknown0b0[5];
+    i8 bgmVolume;
+    i8 sfxVolume;
+};
+
+struct OptionsControllerMappingView
+{
+    OptionsControllerBinding primaryBinding;
+};
+
+extern OptionsGameConfigView g_OptionsGameConfig;
+extern OptionsControllerMappingView g_OptionsControllerMapping;
+extern i16 g_OptionsLastJoystickButton;
+
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+#pragma pack(push, 4)
+#endif
+struct OptionsMenuView
+{
+    SceneAnmLoadedView *sceneAnm;
+    SceneAnmLoadedView *transitionAnm;
+    ZunTimer stateTimer;
+    ZunTimer animationTimer; // +0x14; current is the menu animation frame
+    ResultScreenReplayCursor cursor;
+    u8 unknown00f8[0xafc];
+    SceneAnmVmIdArray vmIds;
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+    u8 nativeTextGrowth[kFrontEndTextGrowth];
+#endif
+    u8 unknown0e88[0x1c];
+    u8 savedWindowed;
+    u8 unknown0ea5[0x143];
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+    u8 nativeReplayArrayGrowth[80 * kFrontEndPointerGrowth];
+#endif
+    OptionsControllerBinding controllerBinding;
+    u8 unknown0ffa[0x5106];
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+    u8 nativeReplayListGrowth[kFrontEndPointerGrowth];
+#endif
+    AnmVmId transitionVm;
+    u8 unknown6104[8];
+#ifdef DIFFBUILD
+    i32 state;
+#else
+    OptionsMenuState state;
+#endif
+#ifdef DIFFBUILD
+    i32 requestedState;
+#else
+    FrontEndRequestedState requestedState;
+#endif
+    u8 unknown6114[0x0c];
+    u32 outerFlags;
+
+    ChainCallbackResult Update();
+
+    __forceinline void SetDigitSprite(i32 vmIndex, i32 digit)
+    {
+        this->sceneAnm->SetSprite(
+            g_AnmManager->GetVm(this->vmIds[vmIndex]),
+            digit + 0x66);
+    }
+
+    __forceinline void UpdateButton00Sprites()
+    {
+        struct ButtonDigitLocals
+        {
+            i32 onesSprite;
+            i32 tensSprite;
+        } digits;
+        digits.tensSprite = this->controllerBinding.button00 / 10 + 0x66;
+        this->sceneAnm->SetSprite(
+            g_AnmManager->GetVm(this->vmIds[0x74]), digits.tensSprite);
+        digits.onesSprite = this->controllerBinding.button00 % 10 + 0x66;
+        this->sceneAnm->SetSprite(
+            g_AnmManager->GetVm(this->vmIds[0x75]), digits.onesSprite);
+    }
+
+    __forceinline void UpdateButton02Sprites()
+    {
+        struct ButtonDigitLocals
+        {
+            i32 onesSprite;
+            i32 tensSprite;
+        } digits;
+        digits.tensSprite = this->controllerBinding.button02 / 10 + 0x66;
+        this->sceneAnm->SetSprite(
+            g_AnmManager->GetVm(this->vmIds[0x72]), digits.tensSprite);
+        digits.onesSprite = this->controllerBinding.button02 % 10 + 0x66;
+        this->sceneAnm->SetSprite(
+            g_AnmManager->GetVm(this->vmIds[0x73]), digits.onesSprite);
+    }
+
+    __forceinline void UpdateButton06Sprites()
+    {
+        struct ButtonDigitLocals
+        {
+            i32 onesSprite;
+            i32 tensSprite;
+        } digits;
+        digits.tensSprite = this->controllerBinding.button06 / 10 + 0x66;
+        this->sceneAnm->SetSprite(
+            g_AnmManager->GetVm(this->vmIds[0x76]), digits.tensSprite);
+        digits.onesSprite = this->controllerBinding.button06 % 10 + 0x66;
+        this->sceneAnm->SetSprite(
+            g_AnmManager->GetVm(this->vmIds[0x77]), digits.onesSprite);
+    }
+
+    __forceinline void UpdateButtonSprites(i32 firstVm, i32 value)
+    {
+        i32 tensSprite = value / 10 + 0x66;
+        i32 onesSprite = value % 10 + 0x66;
+
+        this->sceneAnm->SetSprite(
+            g_AnmManager->GetVm(this->vmIds[firstVm]),
+            tensSprite);
+        this->sceneAnm->SetSprite(
+            g_AnmManager->GetVm(this->vmIds[firstVm + 1]),
+            onesSprite);
+    }
+
+    __forceinline void UpdateBgmVolumeSprites(i32 value)
+    {
+        if (value >= 100)
+        {
+            g_AnmManager->GetVm(this->vmIds[0x7a])->drawEnabled = 1;
+            this->SetDigitSprite(0x7a, (value / 100) % 10);
+        }
+        else
+        {
+            g_AnmManager->GetVm(this->vmIds[0x7a])->drawEnabled = 0;
+        }
+        if (value >= 10)
+        {
+            g_AnmManager->GetVm(this->vmIds[0x7b])->drawEnabled = 1;
+            this->SetDigitSprite(0x7b, (value / 10) % 10);
+        }
+        else
+        {
+            g_AnmManager->GetVm(this->vmIds[0x7b])->drawEnabled = 0;
+        }
+        this->SetDigitSprite(0x7c, value % 10);
+    }
+
+    __forceinline void UpdateSfxVolumeSprites(i32 value)
+    {
+        if (value >= 100)
+        {
+            g_AnmManager->GetVm(this->vmIds[0x7e])->drawEnabled = 1;
+            this->SetDigitSprite(0x7e, (value / 100) % 10);
+        }
+        else
+        {
+            g_AnmManager->GetVm(this->vmIds[0x7e])->drawEnabled = 0;
+        }
+        if (value >= 10)
+        {
+            g_AnmManager->GetVm(this->vmIds[0x7f])->drawEnabled = 1;
+            this->SetDigitSprite(0x7f, (value / 10) % 10);
+        }
+        else
+        {
+            g_AnmManager->GetVm(this->vmIds[0x7f])->drawEnabled = 0;
+        }
+        this->SetDigitSprite(0x80, value % 10);
+    }
+
+    __forceinline void UpdateWindowModeSprites(u8 windowed)
+    {
+        if (windowed == 0)
+        {
+            this->vmIds.SetInterrupt(0x78, 4);
+            this->vmIds.SetInterrupt(0x79, 5);
+        }
+        else
+        {
+            this->vmIds.SetInterrupt(0x78, 5);
+            this->vmIds.SetInterrupt(0x79, 4);
+        }
+    }
+
+    __forceinline void UpdateSelectionSprites()
+    {
+        this->vmIds.SetInterrupt(0x6b, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_BUTTON02_BINDING) + 2);
+        this->vmIds.SetInterrupt(0x6c, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_BUTTON00_BINDING) + 2);
+        this->vmIds.SetInterrupt(0x6d, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_BUTTON06_BINDING) + 2);
+        this->vmIds.SetInterrupt(0x6e, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_WINDOW_MODE) + 2);
+        this->vmIds.SetInterrupt(0x6f, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_BGM_VOLUME) + 2);
+        this->vmIds.SetInterrupt(0x70, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_SFX_VOLUME) + 2);
+        this->vmIds.SetInterrupt(0x71, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_EXIT) + 2);
+        this->vmIds.SetInterrupt(0x72, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_BUTTON02_BINDING) + 2);
+        this->vmIds.SetInterrupt(0x73, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_BUTTON02_BINDING) + 2);
+        this->vmIds.SetInterrupt(0x74, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_BUTTON00_BINDING) + 2);
+        this->vmIds.SetInterrupt(0x75, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_BUTTON00_BINDING) + 2);
+        this->vmIds.SetInterrupt(0x76, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_BUTTON06_BINDING) + 2);
+        this->vmIds.SetInterrupt(0x77, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_BUTTON06_BINDING) + 2);
+        this->vmIds.SetInterrupt(0x78, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_WINDOW_MODE) + 2);
+        this->vmIds.SetInterrupt(0x79, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_WINDOW_MODE) + 2);
+        this->vmIds.SetInterrupt(0x7a, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_BGM_VOLUME) + 2);
+        this->vmIds.SetInterrupt(0x7b, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_BGM_VOLUME) + 2);
+        this->vmIds.SetInterrupt(0x7c, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_BGM_VOLUME) + 2);
+        this->vmIds.SetInterrupt(0x7d, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_BGM_VOLUME) + 2);
+        this->vmIds.SetInterrupt(0x7e, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_SFX_VOLUME) + 2);
+        this->vmIds.SetInterrupt(0x7f, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_SFX_VOLUME) + 2);
+        this->vmIds.SetInterrupt(0x80, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_SFX_VOLUME) + 2);
+        this->vmIds.SetInterrupt(0x81, (this->cursor.GetCurrent() != OPTIONS_MENU_ITEM_SFX_VOLUME) + 2);
+    }
+};
+
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+#pragma pack(pop)
+static_assert(offsetof(OptionsMenuView, vmIds) == kFrontEndVmOffset, "options VM owner");
+static_assert(offsetof(OptionsMenuView, outerFlags) == kFrontEndFlagsOffset, "options state owner");
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char OptionsControllerBindingSizeIs12[
+    (sizeof(OptionsControllerBinding) == 0x12) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char OptionsGameConfigWindowedAtAF[
+    (offsetof(OptionsGameConfigView, windowed) == 0xaf) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char OptionsGameConfigVolumesAtB5[
+    (offsetof(OptionsGameConfigView, bgmVolume) == 0xb5 &&
+     offsetof(OptionsGameConfigView, sfxVolume) == 0xb6) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char OptionsMenuAnimationTimerAt14[
+    (offsetof(OptionsMenuView, animationTimer) == 0x14) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char OptionsMenuCursorAt20[
+    (offsetof(OptionsMenuView, cursor) == 0x20) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char OptionsMenuVmIdsAtBF4[
+    (offsetof(OptionsMenuView, vmIds) == 0xbf4) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char OptionsMenuSavedWindowedAtEA4[
+    (offsetof(OptionsMenuView, savedWindowed) == 0xea4) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char OptionsMenuControllerBindingAtFE8[
+    (offsetof(OptionsMenuView, controllerBinding) == 0xfe8) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char OptionsMenuTransitionVmAt6100[
+    (offsetof(OptionsMenuView, transitionVm) == 0x6100) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char OptionsMenuStateAt610C[
+    (offsetof(OptionsMenuView, state) == 0x610c) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char OptionsMenuRequestedStateAt6110[
+    (offsetof(OptionsMenuView, requestedState) == 0x6110) ? 1 : -1];
+#endif
+#ifndef TH095_IOS_PORTABLE_LAYOUT
+typedef char OptionsMenuOuterFlagsAt6120[
+    (offsetof(OptionsMenuView, outerFlags) == 0x6120) ? 1 : -1];
+#endif
+
+} // namespace th095
+
+#endif
+
+#endif // TH095_MATCH_EXACT
