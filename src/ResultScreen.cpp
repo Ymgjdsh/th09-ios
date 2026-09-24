@@ -344,7 +344,9 @@ inline u16 IsResultMenuInputPressed(u16 buttons)
 
 inline ResultScreenAnmVm *GetResultVm(ResultScreen *resultScreen, i32 index)
 {
-    return &resultScreen->vms[index];
+    if (index < 21) return &resultScreen->vms[index];
+    if (index < 23) return &resultScreen->auxiliaryVms[index - 21];
+    return index == 23 ? &resultScreen->photoVm : &resultScreen->photoTransitionVm;
 }
 
 static __forceinline void FreeResultHelpText(ResultScreen *resultScreen)
@@ -686,17 +688,17 @@ static __forceinline void InitializeReplayExtraTailPhase(
     resultScreen->replayCursor.count = 2;
     // Target 0x00428B1C/0x00428B36 read the same Supervisor::textAnm owner
     // used by the normal replay-label path below.
-    g_Supervisor.textAnm->InitializeVm(&resultScreen->vms[21], 9);
-    g_Supervisor.textAnm->InitializeVm(&resultScreen->vms[22], 10);
-    resultScreen->vms[21].glyphWidth = 0x12;
-    resultScreen->vms[21].glyphHeight = 0x12;
-    resultScreen->vms[22].glyphWidth = 0x12;
-    resultScreen->vms[22].glyphHeight = 0x12;
+    g_Supervisor.textAnm->InitializeVm(&resultScreen->auxiliaryVms[0], 9);
+    g_Supervisor.textAnm->InitializeVm(&resultScreen->auxiliaryVms[1], 10);
+    resultScreen->auxiliaryVms[0].glyphWidth = 0x12;
+    resultScreen->auxiliaryVms[0].glyphHeight = 0x12;
+    resultScreen->auxiliaryVms[1].glyphWidth = 0x12;
+    resultScreen->auxiliaryVms[1].glyphHeight = 0x12;
     reinterpret_cast<AnmTextManagerView *>(g_AnmManager)->DrawTextLeft(
-        reinterpret_cast<AnmTextVmView *>(&resultScreen->vms[21]),
+        reinterpret_cast<AnmTextVmView *>(&resultScreen->auxiliaryVms[0]),
         0xffe0c0, 0x300000, " ");
     reinterpret_cast<AnmTextManagerView *>(g_AnmManager)->DrawTextLeft(
-        reinterpret_cast<AnmTextVmView *>(&resultScreen->vms[22]),
+        reinterpret_cast<AnmTextVmView *>(&resultScreen->auxiliaryVms[1]),
         0xffe0c0, 0x300000, " ");
 }
 
@@ -732,21 +734,21 @@ void __fastcall InitializeReplayResultScreen(ResultScreen *resultScreen)
         // Exact relocations at 0x00428DC0/0x00428DD9 read target
         // 0x004C4AAC, Supervisor::textAnm.  These two VMs render writable
         // replay labels and are not owned by the result-screen ANM.
-        g_Supervisor.textAnm->InitializeVm(&resultScreen->vms[21], 9);
-        g_Supervisor.textAnm->InitializeVm(&resultScreen->vms[22], 10);
-        resultScreen->vms[21].glyphWidth = 0x12;
-        resultScreen->vms[21].glyphHeight = 0x12;
-        resultScreen->vms[22].glyphWidth = 0x12;
-        resultScreen->vms[22].glyphHeight = 0x12;
+        g_Supervisor.textAnm->InitializeVm(&resultScreen->auxiliaryVms[0], 9);
+        g_Supervisor.textAnm->InitializeVm(&resultScreen->auxiliaryVms[1], 10);
+        resultScreen->auxiliaryVms[0].glyphWidth = 0x12;
+        resultScreen->auxiliaryVms[0].glyphHeight = 0x12;
+        resultScreen->auxiliaryVms[1].glyphWidth = 0x12;
+        resultScreen->auxiliaryVms[1].glyphHeight = 0x12;
 
         reinterpret_cast<AnmTextManagerView *>(g_AnmManager)->DrawTextLeft(
-            reinterpret_cast<AnmTextVmView *>(&resultScreen->vms[21]),
+            reinterpret_cast<AnmTextVmView *>(&resultScreen->auxiliaryVms[0]),
             0xffe0c0, 0x300000,
             resultScreen->sceneLabels[resultScreen->selectedGroup]
                 [g_ResultSaveData->profile.nextSceneByGroup[
                     resultScreen->selectedGroup]].firstLine);
         reinterpret_cast<AnmTextManagerView *>(g_AnmManager)->DrawTextLeft(
-            reinterpret_cast<AnmTextVmView *>(&resultScreen->vms[22]),
+            reinterpret_cast<AnmTextVmView *>(&resultScreen->auxiliaryVms[1]),
             0xffe0c0, 0x300000,
             resultScreen->sceneLabels[resultScreen->selectedGroup]
                 [g_ResultSaveData->profile.nextSceneByGroup[
@@ -870,9 +872,9 @@ void ResultScreen::PrepareBestShot()
     if (bestShot >= 0)
     {
         g_ResultPhotoData->anm->InitializeVm(
-            &this->vms[23], bestShot * 2 + 1);
+            &this->photoVm, bestShot * 2 + 1);
 
-        ResultScreenAnmVm *vm = &this->vms[23];
+        ResultScreenAnmVm *vm = &this->photoVm;
         vm->spriteSize.x = vm->loadedSprite->uvEndX * 255.0f;
         vm->spriteSize.y = vm->loadedSprite->uvEndY * 255.0f;
 
@@ -941,13 +943,13 @@ void __fastcall UpdatePhotoResultScreen(ResultScreen *resultScreen)
         if (resultScreen->photoCursor.HasChanged())
         {
             i32 photoIndex = resultScreen->photoCursor.GetCurrent();
-            resultScreen->vms[24] = resultScreen->vms[23];
-            resultScreen->vms[24].SetInterrupt((direction <= 0) + 7);
+            resultScreen->photoTransitionVm = resultScreen->photoVm;
+            resultScreen->photoTransitionVm.SetInterrupt((direction <= 0) + 7);
             g_ResultPhotoData->anm->InitializeVm(
-                &resultScreen->vms[23], photoIndex * 2 + 1);
-            resultScreen->vms[23].SetInterrupt((direction > 0) + 9);
+                &resultScreen->photoVm, photoIndex * 2 + 1);
+            resultScreen->photoVm.SetInterrupt((direction > 0) + 9);
 
-            vm = &resultScreen->vms[23];
+            vm = &resultScreen->photoVm;
             vm->spriteSize.x = vm->loadedSprite->uvEndX * 255.0f;
             vm->spriteSize.y = vm->loadedSprite->uvEndY * 255.0f;
 
@@ -1110,7 +1112,7 @@ static int ResultMenuFirstVm(const ResultScreen *menu)
     default: return -1;
     }
 }
-#ifndef NDEBUG
+#if !defined(NDEBUG) || defined(TH095_IOS_REGRESSION_DRIVER)
 bool ResultScreenTouchPointForItem(int item, float *x, float *y)
 {
     if (!g_ResultScreen || g_ResultScreen->stateTimer.current < 30) return false;
@@ -1241,7 +1243,7 @@ ChainCallbackResult ResultScreen::Update()
             this->replayCursor.Set(0);
             this->stateTimer.Reset();
             ResultUpdateInterruptFirstPhase(this);
-            this->vms[23].SetInterrupt(1);
+            this->photoVm.SetInterrupt(1);
             break;
         }
         else if (GetPressedButtons(0x1002) != 0)
@@ -1251,7 +1253,7 @@ ChainCallbackResult ResultScreen::Update()
             {
             case 0:
                 ResultUpdateInterruptFirstPhase(this);
-                this->vms[23].SetInterrupt(1);
+                this->photoVm.SetInterrupt(1);
                 g_SoundPlayer.PlaySoundByIdx(SOUND_BACK, 0);
                 break;
             case 1:
@@ -1308,7 +1310,7 @@ ChainCallbackResult ResultScreen::Update()
             this->replayCursor.Set(0);
             this->stateTimer.Reset();
             ResultUpdateInterruptFirstPhase(this);
-            this->vms[23].SetInterrupt(1);
+            this->photoVm.SetInterrupt(1);
             break;
         }
         else if (GetPressedButtons(0x1002) != 0)
@@ -1319,7 +1321,7 @@ ChainCallbackResult ResultScreen::Update()
             case 0:
                 g_SoundPlayer.PlaySoundByIdx(SOUND_BACK, 0);
                 ResultUpdateInterruptFirstPhase(this);
-                this->vms[23].SetInterrupt(1);
+                this->photoVm.SetInterrupt(1);
                 break;
             case 1:
                 g_SoundPlayer.PlaySoundByIdx(SOUND_SELECT, 0);
@@ -1430,7 +1432,7 @@ ChainCallbackResult ResultScreen::Update()
                 {
                     this->vms[i].SetInterrupt(1);
                 }
-                this->vms[23].SetInterrupt(1);
+                this->photoVm.SetInterrupt(1);
                 switch (this->replayCursor.GetCurrent())
                 {
                 default:
@@ -1822,14 +1824,14 @@ ChainCallbackResult ResultScreen::Draw()
     {
         TH095_RESULT_VM_DRAW(&this->vms[i]);
     }
-    TH095_RESULT_VM_DRAW(&this->vms[23]);
-    TH095_RESULT_VM_DRAW(&this->vms[24]);
+    TH095_RESULT_VM_DRAW(&this->photoVm);
+    TH095_RESULT_VM_DRAW(&this->photoTransitionVm);
 
     switch (this->state)
     {
     case TH095_RESULT_STATE_REPLAY_RESULT_MENU:
-        TH095_RESULT_VM_DRAW(&this->vms[21]);
-        TH095_RESULT_VM_DRAW(&this->vms[22]);
+        TH095_RESULT_VM_DRAW(&this->auxiliaryVms[0]);
+        TH095_RESULT_VM_DRAW(&this->auxiliaryVms[1]);
         break;
 
     case TH095_RESULT_STATE_PHOTO_RESULT_MENU:

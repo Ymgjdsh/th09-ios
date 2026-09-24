@@ -1,5 +1,9 @@
 #include "Global.hpp"
 #include "Main.hpp"
+#ifdef TH095_IOS
+#include "GameplayGlobals.hpp"
+static_assert(sizeof(th095::g_BackbufferClearColor) == 4, "D3D clear color must remain 32-bit");
+#endif
 
 namespace th095
 {

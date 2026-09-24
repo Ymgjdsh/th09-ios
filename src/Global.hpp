@@ -273,5 +273,5 @@ i32 IsResourceReloadEnabled();
     DIFFABLE_STATIC(u32, g_PhotoScreenFadeColor)
 #else
 #define TH095_DEFINE_BACKBUFFER_CLEAR_COLOR_STORAGE() \
-    unsigned int &g_BackbufferClearColor = g_Supervisor.backbufferClearColor
+    u32 &g_BackbufferClearColor = g_Supervisor.backbufferClearColor
 #endif

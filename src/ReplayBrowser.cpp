@@ -259,10 +259,19 @@ void __fastcall LoadReplayBrowserEntries(void *)
     }
 
     locals.slot = 20;
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+    // The app bundle is read-only and the scan runs on a worker. Keep the
+    // process-wide resource directory unchanged; the iOS file adapter finds
+    // this relative pattern in Documents/replay. LoadReplaySlot takes the
+    // basename because ReplayManager already adds the replay/ prefix.
+    locals.findHandle = FindFirstFileA(
+        "replay/th95_ud????.rpy", &locals.findData);
+#else
     _mkdir("replay");
     _chdir("replay");
     locals.findHandle = FindFirstFileA(
         "th95_ud????.rpy", &locals.findData);
+#endif
     if (locals.findHandle != INVALID_HANDLE_VALUE)
     {
         while (locals.slot < 80)
@@ -276,11 +285,15 @@ void __fastcall LoadReplayBrowserEntries(void *)
             {
                 break;
             }
+#ifndef TH095_IOS_PORTABLE_LAYOUT
             _chdir("../");
+#endif
             locals.browser->LoadReplaySlot(
                 locals.slot, locals.findData.cFileName);
             locals.slot++;
+#ifndef TH095_IOS_PORTABLE_LAYOUT
             _chdir("replay");
+#endif
             if (FindNextFileA(
                     locals.findHandle, &locals.findData) == 0)
             {
@@ -289,7 +302,9 @@ void __fastcall LoadReplayBrowserEntries(void *)
         }
     }
     FindClose(locals.findHandle);
+#ifndef TH095_IOS_PORTABLE_LAYOUT
     _chdir("../");
+#endif
 
 finish:
     g_HelpLoadActive = 0;

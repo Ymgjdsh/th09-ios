@@ -90,6 +90,9 @@ void TH095IosForgetPointer(uintptr_t pointerValue);
 // to UTF-8 only while their text texture is being generated.
 BOOL TH095IosSetGdiTextUtf8(BOOL enabled);
 BOOL TH095IosGetGdiTextUtf8();
+// Resolve through CoreText so the controls and game use the same installed
+// font on iOS 14 devices and newer simulator runtimes.
+const char *TH095IosSystemFontPath();
 
 // Rasterize a localized UTF-8 label directly into an RGBA8 destination.
 // This bypasses the retail A1R5G5B5 GDI path, whose alpha convention is not

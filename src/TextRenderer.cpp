@@ -3,10 +3,8 @@
 #include "Global.hpp"
 
 #include <string.h>
-#include <algorithm>
 #ifdef TH095_IOS
 #include <stdio.h>
-#include "modern/ios/ios_compat.hpp"
 namespace th095 { namespace modern { void LogStartup(const char *); } }
 #endif
 
@@ -584,54 +582,6 @@ void TextHelperView::RenderTextToTextureBold(
     i32 glyphHeight, COLORREF textColor, COLORREF shadowColor,
     const char *text, IDirect3DTexture8 *texture)
 {
-#ifdef TH095_IOS
-    // The retail GDI/CP932 path relies on 32-bit Win32 handles and the
-    // original TextRenderBuffer layout.  On arm64 iOS that path can receive
-    // a texture whose surface has not been created yet (scene-preview text
-    // is the first caller), and the old dereference crashes in
-    // SceneSelectController::BuildScenePreviewText.  Rasterize directly into
-    // the portable RGBA surface instead.  This also keeps menu text visible
-    // on real Retina devices, where the emulated GDI alpha convention is not
-    // available.
-    if (texture == NULL)
-    {
-        modern::LogStartup("text/raster: skipped null destination texture");
-        return;
-    }
-    IDirect3DSurface8 *surface = NULL;
-    if (texture->GetSurfaceLevel(0, &surface) != S_OK || surface == NULL)
-    {
-        modern::LogStartup("text/raster: destination surface unavailable");
-        return;
-    }
-    D3DLOCKED_RECT locked = {};
-    const HRESULT lockResult = surface->LockRect(&locked, NULL, 0);
-    if (lockResult == S_OK && locked.pBits != NULL && locked.Pitch > 0)
-    {
-        D3DSURFACE_DESC description = {};
-        surface->GetDesc(&description);
-        const int surfaceWidth = static_cast<int>(description.Width);
-        const int surfaceHeight = static_cast<int>(description.Height);
-        const int rasterWidth = std::max(1, std::min(surfaceWidth,
-            width > 0 ? width : glyphWidth * 2 + 8));
-        const int rasterHeight = std::max(1, std::min(surfaceHeight,
-            height > 0 ? height : glyphHeight + 4));
-        memset(locked.pBits, 0, static_cast<size_t>(locked.Pitch) * surfaceHeight);
-        if (TH095IosRasterizeTextUtf8(text, glyphHeight > 0 ? glyphHeight : glyphWidth,
-                                      rasterWidth, rasterHeight, textColor, shadowColor,
-                                      static_cast<BYTE *>(locked.pBits), locked.Pitch))
-        {
-            TH095IosMarkTextureRgba(texture);
-        }
-        surface->UnlockRect();
-    }
-    else
-    {
-        modern::LogStartup("text/raster: destination surface lock failed");
-    }
-    surface->Release();
-    return;
-#endif
     TextBoldLocals locals;
 #ifdef TH095_IOS
     char textDrawLog[180];

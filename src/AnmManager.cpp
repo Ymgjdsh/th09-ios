@@ -3,9 +3,29 @@
 #include "AnmVmLifecycle.hpp"
 #endif
 #include "diffbuild.hpp"
+#ifdef TH095_IOS
+#include "modern/ios/ios_touch.hpp"
+#include <cstdio>
+#endif
 
 namespace th095
 {
+
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+// The reconstructed wrappers return void, whereas Chain consumes a result.
+// Casting those functions to ChainCallback only happened to retain the inner
+// call's return register at -O0. At -O2 an empty draw layer returned zero and
+// Chain removed that layer permanently before title loading finished.
+template <void (*Job)(void *)>
+static ChainCallbackResult ContinueAnmJob(void *owner)
+{
+    Job(owner);
+    return CHAIN_CALLBACK_RESULT_CONTINUE;
+}
+#define TH095_ANM_CHAIN_CALLBACK(job) ContinueAnmJob<job>
+#else
+#define TH095_ANM_CHAIN_CALLBACK(job) (ChainCallback)(job)
+#endif
 
 #if defined(TH095_MATCH_EXACT) || defined(DIFFBUILD)
 #define ownedRenderData generatedVertices
@@ -991,43 +1011,43 @@ AnmManager::AnmManager()
     this->captureAnmIdx = -1;
     this->captureSurfaceIdx = -1;
 
-    elem = g_Chain.CreateElem((ChainCallback)AnmManager::OnUpdate);
+    elem = g_Chain.CreateElem(TH095_ANM_CHAIN_CALLBACK(AnmManager::OnUpdate));
     elem->arg = this;
     g_Chain.AddToCalcChain(elem, 9);
 
-    elem = g_Chain.CreateElem((ChainCallback)AnmManager::DrawLayer0);
+    elem = g_Chain.CreateElem(TH095_ANM_CHAIN_CALLBACK(AnmManager::DrawLayer0));
     elem->arg = this;
     g_Chain.AddToDrawChain(elem, 5);
 
-    elem = g_Chain.CreateElem((ChainCallback)AnmManager::DrawLayer1);
+    elem = g_Chain.CreateElem(TH095_ANM_CHAIN_CALLBACK(AnmManager::DrawLayer1));
     elem->arg = this;
     g_Chain.AddToDrawChain(elem, 7);
 
-    elem = g_Chain.CreateElem((ChainCallback)AnmManager::DrawLayer2);
+    elem = g_Chain.CreateElem(TH095_ANM_CHAIN_CALLBACK(AnmManager::DrawLayer2));
     elem->arg = this;
     g_Chain.AddToDrawChain(elem, 8);
 
-    elem = g_Chain.CreateElem((ChainCallback)AnmManager::DrawLayer3);
+    elem = g_Chain.CreateElem(TH095_ANM_CHAIN_CALLBACK(AnmManager::DrawLayer3));
     elem->arg = this;
     g_Chain.AddToDrawChain(elem, 9);
 
-    elem = g_Chain.CreateElem((ChainCallback)AnmManager::DrawLayer4);
+    elem = g_Chain.CreateElem(TH095_ANM_CHAIN_CALLBACK(AnmManager::DrawLayer4));
     elem->arg = this;
     g_Chain.AddToDrawChain(elem, 0xc);
 
-    elem = g_Chain.CreateElem((ChainCallback)AnmManager::DrawLayer5);
+    elem = g_Chain.CreateElem(TH095_ANM_CHAIN_CALLBACK(AnmManager::DrawLayer5));
     elem->arg = this;
     g_Chain.AddToDrawChain(elem, 0xf);
 
-    elem = g_Chain.CreateElem((ChainCallback)AnmManager::DrawLayer6);
+    elem = g_Chain.CreateElem(TH095_ANM_CHAIN_CALLBACK(AnmManager::DrawLayer6));
     elem->arg = this;
     g_Chain.AddToDrawChain(elem, 0x11);
 
-    elem = g_Chain.CreateElem((ChainCallback)AnmManager::DrawLayer7);
+    elem = g_Chain.CreateElem(TH095_ANM_CHAIN_CALLBACK(AnmManager::DrawLayer7));
     elem->arg = this;
     g_Chain.AddToDrawChain(elem, 0x18);
 
-    elem = g_Chain.CreateElem((ChainCallback)AnmManager::DrawLayer8);
+    elem = g_Chain.CreateElem(TH095_ANM_CHAIN_CALLBACK(AnmManager::DrawLayer8));
     elem->arg = this;
     g_Chain.AddToDrawChain(elem, 0x19);
 }
@@ -1082,6 +1102,15 @@ void Float3::FromAngleMagnitude(f32 angle, f32 magnitude)
 
 ZunResult AnmManager::Draw(AnmVm *vm)
 {
+#ifdef TH095_IOS
+    static int drawDiagnostics = 0;
+    if (vm->renderMode == 7 && vm->color1.a && drawDiagnostics++ < 24)
+    {
+        char message[256];
+        snprintf(message, sizeof(message), "anm/draw: vm=%d flags=%08x mode=%d sprite=%d size=%.1f,%.1f pos=%.1f,%.1f,%.1f callback=%p", vm->id, vm->flagsWord, vm->renderModeBits, vm->activeSpriteIndex, vm->spriteSize.x, vm->spriteSize.y, vm->position.x+vm->positionOffset.x, vm->position.y+vm->positionOffset.y, vm->position.z+vm->positionOffset.z, reinterpret_cast<void *>(vm->drawCallback));
+        modern::LogStartup(message);
+    }
+#endif
     if (!vm->visible)
         return ZUN_ERROR;
 

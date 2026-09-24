@@ -1,8 +1,9 @@
 #include "ios_touch.hpp"
+#include "ios_compat.hpp"
 #include "FrontEndGlobals.hpp"
 #include "GameplayGlobals.hpp"
 #include "PhotoGameTask.hpp"
-#ifndef NDEBUG
+#if !defined(NDEBUG) || defined(TH095_IOS_REGRESSION_DRIVER)
 #include "PhotoPlayerRuntime.hpp"
 #include "PhotoEnemyManager.hpp"
 #endif
@@ -133,15 +134,8 @@ void Label(const Button &button)
     if (!font)
     {
         if (!TTF_WasInit()) TTF_Init();
-        const char *fontPaths[] = {
-            "/System/Library/Fonts/CoreUI/SFUI.ttf",
-            "/System/Library/Fonts/CoreUI/SFUI-Regular.otf",
-            "/System/Library/Fonts/PingFang.ttc",
-            "/System/Library/Fonts/Helvetica.ttc",
-            NULL
-        };
-        for (const char **path = fontPaths; *path != NULL && font == nullptr; ++path)
-            font = TTF_OpenFont(*path,24);
+        const char *fontPath = TH095IosSystemFontPath();
+        if (fontPath != nullptr) font = TTF_OpenFont(fontPath,24);
         if (!font)
         {
             char message[192];
@@ -160,6 +154,7 @@ void Label(const Button &button)
         SDL_FreeSurface(raw);
         if (!rgba) return;
         Text t = {0,rgba->w,rgba->h};
+        glActiveTexture(GL_TEXTURE0);
         glGenTextures(1,&t.texture); glBindTexture(GL_TEXTURE_2D,t.texture);
         glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
@@ -171,6 +166,7 @@ void Label(const Button &button)
     }
     const Text &t = it->second;
     float scale = std::min(button.w*.83f/t.w,button.h*(button.circular ? .64f : .38f)/t.h);
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D,t.texture); IosLegacySetTextureUsage(GL_TRUE,GL_TRUE);
     Rectangle(button.x+(button.w-t.w*scale)/2,button.y+(button.h-t.h*scale)/2,t.w*scale,t.h*scale,255,255,255,255);
 }
@@ -217,7 +213,43 @@ u16 PollButtons()
 {
     LoadSettings();
     u16 regressionButtons = 0;
-#ifndef NDEBUG
+#if !defined(NDEBUG) || defined(TH095_IOS_REGRESSION_DRIVER)
+    if (SDL_getenv("TH095_IOS_TEST_MENU_CYCLE"))
+    {
+        // Traverse the real front-end handlers and return with X. In
+        // particular, resource loading must still work after replay scanning.
+        static const float rows[] = {178,210,250,300,140};
+        static unsigned step = 0, age = 0;
+        static bool selected = false;
+        if (step < sizeof(rows)/sizeof(rows[0]))
+        {
+            if (!selected && FrontEndTapMainMenu(150,rows[step]))
+            {
+                selected = true; age = 0;
+                g_tapUntil = SDL_GetTicks()+150;
+                char message[100];
+                snprintf(message,sizeof(message),"test-menu-cycle: entered item %u",step);
+                modern::LogStartup(message);
+            }
+            if (selected)
+            {
+                ++age;
+                if (step == 4) { step=5; modern::LogStartup("test-menu-cycle: returned through all menus to Start"); }
+                else if (age>=180 && age<195)
+                {
+                    // Original Options requires selecting its Exit row;
+                    // X on a controller-binding row intentionally does nothing.
+                    if (step==2)
+                    {
+                        if (FrontEndTapSubmenu(150,328)==2)
+                            regressionButtons |= TH_BUTTON_SHOOT;
+                    }
+                    else regressionButtons |= TH_BUTTON_BOMB;
+                }
+                else if (age>=330) { ++step; selected=false; }
+            }
+        }
+    }
     static bool resultTapDone=false;
     const char *resultItem=SDL_getenv("TH095_IOS_TEST_RESULT_ITEM");
     if (resultItem && !resultTapDone && Gameplay() && !Battle())
@@ -407,7 +439,20 @@ void ProcessEvent(const SDL_Event &event)
             }
             else if (Battle() && button.mask == TH_BUTTON_SHOOT && g_zToggle) g_zLatched = !g_zLatched;
             else if (Battle() && button.mask == TH_BUTTON_FOCUS && g_sToggle) g_sLatched = !g_sLatched;
-            else g_fingers[event.tfinger.fingerId] = {button.mask,false};
+            else
+            {
+                g_fingers[event.tfinger.fingerId] = {button.mask,false};
+                // SDL can deliver both edges of a short tap before the next
+                // game input sample (especially while loading). Keep menu
+                // actions observable for one sample; battle Z/S remain true
+                // hold/release controls so photograph timing is unchanged.
+                if (button.mask == TH_BUTTON_MENU ||
+                    (!Battle() && (button.mask == TH_BUTTON_SHOOT || button.mask == TH_BUTTON_BOMB)))
+                {
+                    g_command = button.mask;
+                    g_commandUntil = SDL_GetTicks()+150;
+                }
+            }
             return;
         }
         if (g_settings) return;

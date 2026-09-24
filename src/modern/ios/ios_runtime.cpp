@@ -405,6 +405,7 @@ bool ConfigureDataDirectory()
         }
     }
     WriteDiagnosticLine("configure: begin");
+    WriteDiagnosticLine("build: TH095 iOS 0.1.1 (2), minimum iOS 14.0");
     if (directory != NULL && (directory[0] == '\0' || chdir(directory) != 0))
     {
         fprintf(stderr, "TH095-modern: unable to enter data directory: %s\n", directory);

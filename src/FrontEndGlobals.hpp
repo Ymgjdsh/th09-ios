@@ -51,9 +51,8 @@ bool FrontEndSceneSelectReady();
 int FrontEndTapSubmenu(float x, float y);
 int FrontEndTapScene(float x, float y);
 int ResultScreenTapMenu(float x, float y);
-#ifndef NDEBUG
+// Defined only in simulator regression builds.
 bool ResultScreenTouchPointForItem(int item, float *x, float *y);
-#endif
 #endif
 
 // These historical target-facing globals are not independent storage. They are

@@ -541,12 +541,27 @@ FrontEndLifecycleView *__fastcall FrontEndLifecycleView::Create(i32 mode)
 #endif
     controller->entryMode = mode;
 
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+    // Preserve Update/Draw's chain result through a correctly typed callback;
+    // a void wrapper loses it under optimized arm64 and simulator builds.
+    elem = g_Chain.CreateElem([](void *owner) -> ChainCallbackResult {
+        if (FrontEndTitleLoadIncomplete(owner)) return CHAIN_CALLBACK_RESULT_CONTINUE;
+        return static_cast<SceneSelectControllerView *>(owner)->Update();
+    });
+#else
     elem = g_Chain.CreateElem((ChainCallback)TH095_FRONT_END_ON_UPDATE);
+#endif
     elem->arg = controller;
     g_Chain.AddToCalcChain(elem, 4);
     controller->calcChain = elem;
 
+#ifdef TH095_IOS_PORTABLE_LAYOUT
+    elem = g_Chain.CreateElem([](void *owner) -> ChainCallbackResult {
+        return static_cast<SceneSelectControllerView *>(owner)->Draw();
+    });
+#else
     elem = g_Chain.CreateElem((ChainCallback)TH095_FRONT_END_ON_DRAW);
+#endif
     elem->arg = controller;
     g_Chain.AddToDrawChain(elem, 1);
     controller->drawChain = elem;

@@ -10,10 +10,20 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
         "Compatibility floor for vendored SDL/FreeType subprojects" FORCE)
 endif()
 
-set(TH095_IOS_VERSION "0.1.0" CACHE STRING "iOS marketing version")
-set(TH095_IOS_BUILD "1" CACHE STRING "iOS build number")
+set(TH095_IOS_VERSION "0.1.1" CACHE STRING "iOS marketing version")
+set(TH095_IOS_BUILD "2" CACHE STRING "iOS build number")
 set(TH095_IOS_BUNDLE_ID "com.th095.reconstruction" CACHE STRING "Bundle identifier")
 option(TH095_FULL_PORT "Build the reconstructed TH095 runtime instead of the bring-up shell" OFF)
+option(TH095_IOS_REGRESSION_DRIVER "Enable scripted input in simulator validation builds" OFF)
+if(TH095_IOS_REGRESSION_DRIVER)
+    if(NOT CMAKE_OSX_SYSROOT MATCHES "iphonesimulator")
+        message(FATAL_ERROR "Regression input is restricted to simulator builds")
+    endif()
+    set_source_files_properties(
+        "${CMAKE_CURRENT_SOURCE_DIR}/../src/modern/ios/ios_touch_portable.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../src/ResultScreen.cpp"
+        PROPERTIES COMPILE_DEFINITIONS TH095_IOS_REGRESSION_DRIVER)
+endif()
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     message(FATAL_ERROR "Use an iOS CMake toolchain: -DCMAKE_SYSTEM_NAME=iOS")

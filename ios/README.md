@@ -1,30 +1,58 @@
-# TH095 iOS port lane
+# TH095 iOS port
 
-This directory is a separate iOS14+ bring-up product. It is not part of the
-VC7.1 exact-build lane and it does not include the original executable or game
-archives.
+This is the separate iOS 14+ port of the Japanese TH095 1.02a reconstruction.
+The full runtime uses SDL2, an OpenGL ES 2 implementation of the required D3D8
+operations, CP932 text conversion, and the game's original scripts and data.
+Portable builds do not establish byte-exact reconstruction or complete
+all-scene equivalence. See VALIDATION.md for the observed test coverage.
 
-The current milestone is an arm64 device / Intel simulator UIKit bring-up with:
+## Controls
 
-- a 60 Hz display loop and persistent `Documents/startup.log` diagnostics;
-- touch movement with direct Z/S action regions;
-- a settings overlay with persistent Z and S hold/toggle modes;
-- a private user-data path for legally supplied `th095.dat` testing;
-- a native THA1/PBG/LZSS reader that validates all 262 archive entries;
-- real `title.anm` and `world01.anm` THTX texture decoding on the simulator.
+- Left joystick: eight-direction movement. Dragging the playfield also moves
+  the player relative to the finger, with configurable sensitivity.
+- Z: photograph / confirm. S: focus / slow movement. X: cancel.
+- The pause button opens the original pause menu. The `...` button opens
+  persistent settings for Z toggle, S toggle, portrait battle and touch speed.
+- Supported menu labels can be tapped directly. The joystick and Z/X remain
+  available for the original menus.
+- Portrait battle enlarges the central playfield while reserving space below
+  for controls; landscape preserves the original 4:3 frame. iPad is supported.
 
-The TH095 gameplay state machine, ANM/D3D8 renderer, audio, menu scripts,
-replay, and scene/ECL execution are not yet connected to this bring-up. The
-current app is a resource and input validation build and must not be described
-or packaged as a complete game port.
+## Build
 
-The Intel Mac iOS 14 simulator has been checked with the archive in the app's
-private `Documents/TH095Data` directory. The startup log records
-`archive entries=262 probes=5 title=256x256`, and the screenshot shows the
-decoded original title texture without a black-screen failure. An arm64
-iphoneos build also completes with an iOS 14 deployment target. These checks
-cover archive and texture bring-up only; they do not establish full gameplay.
+Use macOS with Xcode 14 or newer and CMake. Dependencies are pinned in
+CMakeLists.txt. Keep the iOS deployment target at 14.0. Place your own Japanese
+th095.dat and thbgm.dat under ios/resources/; they are required for the
+private playable package and must never be committed to this repository.
 
-Build on the Mac with CMake/Xcode 14, deployment target iOS 14.0. Use an
-`arm64` device build and `x86_64` on an Intel Mac simulator. Original data and
-credentials are deliberately excluded from source and IPA artifacts.
+```sh
+cmake -S ios -B build-ios-device -G Xcode \
+  -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+  -DTH095_FULL_PORT=ON -DTH095_IOS_REGRESSION_DRIVER=OFF \
+  -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
+cmake --build build-ios-device --config Release -j2
+```
+
+The resulting device .app is packaged inside Payload/ for TrollStore.
+An iOS simulator requires a separately compiled simulator .app, not a device
+IPA. For an Intel Mac, configure iphonesimulator with x86_64 architecture.
+Simulator regression input can be enabled with
+-DTH095_IOS_REGRESSION_DRIVER=ON; CMake rejects that option for device builds.
+Always test Release, since optimization exposed a callback ABI defect that
+Debug testing did not catch.
+
+## Diagnostics and user data
+
+Startup/render diagnostics and crash reports are written to the application's
+Documents directory, exposed through Files/File Sharing. Scores, configuration,
+replays and photographs are also private user data. Preserve them when updating.
+Logs can contain device paths and should not be committed. Do not distribute
+original resources, signing credentials, provisioning files, or build products
+through this source repository.
+
+Version 0.1.1 fixes the missing Release draw jobs, a 64-bit overwrite of a font
+pointer, system-font discovery for touch labels, result VM array indexing,
+32-bit HRESULT error handling and replay browsing that changed the resource
+working directory. It restores the CP932-aware text renderer in place of the
+incorrect whole-atlas RGBA replacement.

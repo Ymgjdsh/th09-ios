@@ -2,6 +2,7 @@
 #define TH095_GAMEPLAY_GLOBALS_HPP
 
 #include "diffbuild.hpp"
+#include "inttypes.hpp"
 
 namespace th095
 {
@@ -52,7 +53,9 @@ DIFFABLE_EXTERN(void *, g_RuntimePlayerOwner);
 #if defined(DIFFBUILD)
 #define TH095_BACKBUFFER_CLEAR_COLOR g_PhotoScreenFadeColor
 #else
-extern unsigned long &g_BackbufferClearColor;
+// D3DCOLOR remains 32 bits on LP64. An unsigned-long reference writes eight
+// bytes on iOS and corrupts the object following Supervisor (a font handle).
+extern u32 &g_BackbufferClearColor;
 #define TH095_BACKBUFFER_CLEAR_COLOR g_BackbufferClearColor
 #endif
 

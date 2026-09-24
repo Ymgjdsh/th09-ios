@@ -65,7 +65,9 @@ typedef const char *LPCSTR;
 typedef wchar_t *LPWSTR;
 typedef const wchar_t *LPCWSTR;
 typedef char *LPTSTR;
-typedef long HRESULT;
+// Windows LONG stays 32-bit on Win64; native long is 64-bit on iOS/macOS.
+// A widened HRESULT incorrectly treats 0x80000000 failure codes as success.
+typedef int32_t HRESULT;
 typedef void *HANDLE;
 typedef HANDLE HGLOBAL;
 typedef HANDLE HINSTANCE;
@@ -198,6 +200,10 @@ typedef const GUID &REFIID;
 #define E_UNEXPECTED ((HRESULT)0x8000ffffL)
 #define CO_E_FIRST ((HRESULT)0x800401f0L)
 #define CO_E_NOTINITIALIZED ((HRESULT)0x800401f0L)
+#ifdef __cplusplus
+static_assert(sizeof(HRESULT) == 4 && FAILED(E_FAIL) && !SUCCEEDED(E_NOTIMPL),
+              "HRESULT must preserve signed 32-bit Windows error semantics");
+#endif
 #define ZeroMemory(d, n) memset((d), 0, (n))
 #define CopyMemory(d, s, n) memcpy((d), (s), (n))
 #define FillMemory(d, n, v) memset((d), (v), (n))

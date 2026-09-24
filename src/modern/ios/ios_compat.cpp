@@ -683,6 +683,12 @@ BOOL TH095IosGetGdiTextUtf8()
     return g_gdiTextUtf8 ? TRUE : FALSE;
 }
 
+const char *TH095IosSystemFontPath()
+{
+    const TextRasterLock lock;
+    return ResolveJapaneseFont(false);
+}
+
 namespace
 {
 void BlendRasterPixel(BYTE *pixel, BYTE red, BYTE green, BYTE blue, BYTE alpha)

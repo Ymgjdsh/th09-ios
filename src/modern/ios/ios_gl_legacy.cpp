@@ -251,7 +251,16 @@ void glEnd()
     if (g_vertices.empty() || !Initialize()) return;
     GLint viewport[4] = {0, 0, 640, 480};
     glGetIntegerv(GL_VIEWPORT, viewport);
-    while (glGetError() != GL_NO_ERROR) {}
+    static unsigned errorReports = 0;
+    for (GLenum error = glGetError(); error != GL_NO_ERROR; error = glGetError())
+    {
+        if (errorReports++ < 16)
+        {
+            char message[96];
+            snprintf(message, sizeof(message), "gles2: pre-draw error=0x%x", error);
+            th095::modern::LogStartup(message);
+        }
+    }
     // D3D8 stage 0 maps to GLES texture unit zero.  Explicitly selecting it
     // here prevents a previous multi-texture/background pass from making the
     // localized text shader sample an uninitialised unit (which appears as a
@@ -282,6 +291,8 @@ void glEnd()
     glEnableVertexAttribArray(g_fogFactorAttribute);
     glEnableVertexAttribArray(g_clipSpaceAttribute);
     const GLsizei stride = sizeof(ImmediateVertex);
+    // Attributes below point at CPU memory, never at an external VBO.
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
     const GLubyte *base = reinterpret_cast<const GLubyte *>(&g_vertices[0]);
     glVertexAttribPointer(g_position, 4, GL_FLOAT, GL_FALSE, stride, base + 0);
     glVertexAttribPointer(g_colorAttribute, 4, GL_FLOAT, GL_FALSE, stride,
@@ -293,6 +304,13 @@ void glEnd()
     glVertexAttribPointer(g_clipSpaceAttribute, 1, GL_FLOAT, GL_FALSE, stride,
                           base + sizeof(GLfloat) * 11);
     glDrawArrays(g_primitiveMode, 0, (GLsizei)g_vertices.size());
+    const GLenum drawError = glGetError();
+    if (drawError != GL_NO_ERROR && errorReports++ < 16)
+    {
+        char message[96];
+        snprintf(message, sizeof(message), "gles2: draw error=0x%x texture=%d", drawError, textureName);
+        th095::modern::LogStartup(message);
+    }
     glDisableVertexAttribArray(g_position); glDisableVertexAttribArray(g_colorAttribute);
     glDisableVertexAttribArray(g_texcoordAttribute);
     glDisableVertexAttribArray(g_fogFactorAttribute);
