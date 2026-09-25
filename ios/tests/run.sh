@@ -2,6 +2,7 @@
 set -eu
 cd "$(dirname "$0")"
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+simulator_destination=${TH095_SIMULATOR_DESTINATION:?Set TH095_SIMULATOR_DESTINATION to an Xcode simulator destination}
 test_name=${1:-testRotateLandscapePortrait}
 case "$test_name" in
   testRotateLandscapePortrait|testBattleRotateLandscapePortrait|testReplayReturnThenBattle|testPortraitBattleAndSettings) ;;
@@ -13,7 +14,7 @@ xcodebuild test-without-building \
   -project TH095UiRegression.xcodeproj \
   -scheme TH095UiRegression \
   -configuration Debug \
-  -destination 'platform=iOS Simulator,id=8C2244DC-5551-4106-BE9C-85CA02D906C2' \
+  -destination "$simulator_destination" \
   -derivedDataPath build \
   -parallel-testing-enabled NO \
   -maximum-concurrent-test-simulator-destinations 1 \

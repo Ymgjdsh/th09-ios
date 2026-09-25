@@ -1,9 +1,8 @@
 # TH095 iOS 0.1.1 validation
 
 Date: 2026-09-25. Product: version 0.1.1, build 2, arm64, minimum iOS 14.0.
-The reported device is iPad mini 5 running iOS 14.1. No physical iOS device
-was connected to the build Mac. Runtime observations below use Xcode 14.0,
-an Intel Mac and an iPad (9th generation) iOS 16.0 simulator. They do not
+No physical iOS device was connected to the build Mac. Runtime observations
+below use Xcode 14.0, an Intel Mac and an iOS 16.0 iPad simulator. They do not
 establish device installation, real-device performance or all-scene completion.
 
 ## Reproduced defects and fixes
@@ -76,10 +75,10 @@ thbgm.dat 6f482af14a46444d3fbfffa4a06960e3e6c9e5879a7485bc8387d6ad6f2c5c2e
 ```
 
 The resulting IPA is a device retest build, not a claim that all original
-scenes, replay determinism, long sessions and iOS 14.1 device behavior have
-been exhaustively verified. Simulator FPS is not a measurement of iPad mini 5
+scenes, replay determinism, long sessions and older-device behavior have
+been exhaustively verified. Simulator FPS is not a measurement of physical-device
 performance. Repeat startup, submenu navigation, portrait/landscape battle and
-several captures on that device; `Documents/startup.log` now identifies build
+several captures on a supported device; `Documents/startup.log` now identifies build
 0.1.1 (2). Files/File Sharing exposes those diagnostics for comparison.
 
 The private `TH095-iOS14-v0.1.1.ipa` was ad-hoc signed and passed strict
@@ -89,4 +88,4 @@ desktops are 141,049,877 bytes and share SHA-256
 The IPA was inspected for arm64/IOS platform, minimum version, bundle version,
 icon assets, matching archive hashes and absence of regression-driver strings
 or private diagnostic/credential files. These checks do not substitute for
-TrollStore installation and launch on the reported iOS 14.1 device.
+TrollStore installation and launch on a physical device.

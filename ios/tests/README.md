@@ -3,8 +3,10 @@
 This independent XCTest target launches the separately installed game. Run it
 against the ordinary Release game build with scripted input disabled.
 
-Use `sh build.sh`, then `sh run.sh TEST_NAME`. Set the simulator destination in
-both scripts to the desired device listed by `xcrun simctl list devices`.
+Set `TH095_SIMULATOR_DESTINATION` to the simulator you want to use, for example
+`platform=iOS Simulator,id=<your-simulator-UDID>`. Then run `sh build.sh` and
+`sh run.sh TEST_NAME`. Discover available simulators with
+`xcrun simctl list devices`; no local simulator identifier is committed here.
 Tests: testRotateLandscapePortrait, testBattleRotateLandscapePortrait,
 testReplayReturnThenBattle, testPortraitBattleAndSettings.
 
